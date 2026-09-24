@@ -3259,6 +3259,22 @@ async def _login_done(cl, uid, m: Message):
         LOGIN_WAIT.pop(uid, None)
         return await m.reply_text(f"❌ Session save fail: <code>{e}</code>")
     LOGIN_WAIT.pop(uid, None)
+    # ★ ADMIN login kare to wahi account GLOBAL fallback userbot ban jaye —
+    #   (jin users ne /login nahi kiya unke liye). Session string env me
+    #   badalne ki zaroorat nahi.
+    _is_owner = uid in ADMINS
+    if _is_owner:
+        global USERBOT, USERBOT_OK, USERBOT_ME
+        try:
+            USERBOT = cl
+            USERBOT_OK = True
+            USERBOT_ME = me
+            await STORE.upsert("sessions", "user_id", 0,
+                               {"user_id": 0, "session": ss})
+            asyncio.create_task(warm_peer_cache())
+            log.info("👑 admin login -> global userbot set: %s", me.id)
+        except Exception as e:
+            log.warning("global userbot set fail: %s", e)
     try:
         await m.delete()          # code/password wala message hata do
     except Exception:
@@ -4238,8 +4254,19 @@ async def start_userbot():
                 await _UB().stop()
             except Exception:
                 pass
+        # ★ DB me admin ke /login se saved session ho to wo pehle use karo —
+        #   (env ka SESSION_STRING expire ho jaye to bot khud chalta rahe)
+        _db_ss = None
+        try:
+            _db_ss = ((await STORE.find_one("sessions", "user_id", 0)) or {}).get("session")
+        except Exception:
+            pass
         sess_file = Path(SESSION_FILE)
-        if sess_file.exists():
+        if _db_ss:
+            USERBOT = Client(name="sparta_db_ub", session_string=_db_ss,
+                             in_memory=True, **kwargs)
+            log.info("👤 userbot session: DB (admin /login wali)")
+        elif sess_file.exists():
             # FILE session prefer karo — isme peer/access-hash cache persist hota
             # hai, warna har restart pe private chats PEER_ID_INVALID deti hain.
             USERBOT = Client(name=sess_file.with_suffix("").name, **kwargs)
@@ -4265,6 +4292,14 @@ async def start_userbot():
     except Exception as e:
         USERBOT_OK = False
         log.error("❌ Userbot start fail: %s", e)
+        if "AUTH_KEY" in str(e).upper():
+            try:
+                await STORE.upsert("sessions", "user_id", 0,
+                                   {"user_id": 0, "session": None})
+                log.warning("💀 dead session hata di — admin /login karke "
+                            "naya account jod sakta hai")
+            except Exception:
+                pass
         if ADMIN_ID:
             try:
                 await CLIENT.send_message(
