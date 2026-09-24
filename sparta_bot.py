@@ -2381,7 +2381,7 @@ CMD_BLOCK = ["start", "help", "id", "search", "plans", "buy", "myplan", "stats",
              "setcache", "link", "status",
              "forward", "cancel", "index", "reindex", "approve", "reject", "setplan",
              "removeplan", "user", "find", "reqs", "usage", "broadcast", "del", "ping",
-             "settings", "setting", "custom"]
+             "settings", "setting", "custom", "raw"]
 
 # ─────────────────────────────── USER: start / help / id ────────────────────
 
