@@ -571,6 +571,8 @@ STORE, STORE_KIND = None, "JSON"
 CLIENT: Client = None
 USERBOT: Client = None
 USERBOT_OK = False
+SESSION_DEAD = False      # env/DB session mar chuki -> retry band
+_ALERT_SENT = {}
 USERBOT_ME = None
 SEM_UB = asyncio.Semaphore(UB_CONCURRENCY)
 BIG_MB = int(_get("BIG_MB", 150))                   # isse bari = "big file"
@@ -3279,8 +3281,10 @@ async def _login_done(cl, uid, m: Message):
     #   badalne ki zaroorat nahi.
     _is_owner = uid in ADMINS
     if _is_owner:
-        global USERBOT, USERBOT_OK, USERBOT_ME
+        global USERBOT, USERBOT_OK, USERBOT_ME, SESSION_DEAD
         try:
+            SESSION_DEAD = False
+            _ALERT_SENT.pop("ub", None)
             USERBOT = cl
             USERBOT_OK = True
             USERBOT_ME = me
@@ -4253,7 +4257,7 @@ async def on_media(c, m: Message):
 
 async def start_userbot():
     """Userbot (aapka account) start karo — link mode ke liye zaroori."""
-    global USERBOT, USERBOT_OK, USERBOT_ME
+    global USERBOT, USERBOT_OK, USERBOT_ME, SESSION_DEAD
     if not (SESSION_STRING or Path(SESSION_FILE).exists()):
         log.warning("🔗 Link mode: userbot session nahi mila -> userbot_login.py chalao")
         return False
@@ -4264,6 +4268,8 @@ async def start_userbot():
                       # Telegram me session ka naam clean dikhe (default "CPython 3.x" hota hai)
                       device_model=DEVICE_NAME, system_version="Ubuntu 22.04",
                       app_version=f"{BOT_NAME} 1.0")
+        if SESSION_DEAD:
+            return False          # naya /login hone tak koshish bekaar hai
         if USERBOT is not None:
             try:
                 await _UB().stop()
@@ -4315,13 +4321,22 @@ async def start_userbot():
                             "naya account jod sakta hai")
             except Exception:
                 pass
-        if ADMIN_ID:
+        # ★ dead session pe baar-baar mat try karo (spam band) — admin ke
+        #   /login karte hi flag apne aap hat jata hai
+        if "AUTH_KEY" in str(e).upper():
+            SESSION_DEAD = True
+        if ADMIN_ID and not _ALERT_SENT.get("ub"):
+            _ALERT_SENT["ub"] = True
             try:
                 await CLIENT.send_message(
                     ADMIN_ID,
-                    f"❌ <b>Userbot start nahi hua</b>\n<code>{esc(e)[:300]}</code>\n\n"
-                    f"👉 Session expire ho gaya ho sakta hai — <code>userbot_login.py</code> "
-                    f"dobara chalao.")
+                    "🔐 <b>OWNER SESSION EXPIRE HO GAYI</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━\n"
+                    "Telegram ne purana login kaat diya hai.\n\n"
+                    "👉 Bas <b>/login</b> bhejo — naya account jud jayega aur "
+                    "wahi global userbot ban jayega ⚡\n\n"
+                    "ℹ️ Jin users ne khud <b>/login</b> kiya hai unka kaam "
+                    "abhi bhi chal raha hai 🫧")
             except Exception:
                 pass
         return False
