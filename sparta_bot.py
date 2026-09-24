@@ -1162,12 +1162,16 @@ async def scan_topic(chat, topic_id, start_id, need, on_progress=None):
     `get_discussion_replies` (RPC messages.GetReplies) sirf usi topic ke
     messages deta hai, aur ye flood-limited bhi nahi hai.
     """
-    got, seen_n = [], 0
+    got, seen_n, all_ids, sample = [], 0, [], []
     try:
         async for mm in USERBOT.get_discussion_replies(chat, topic_id):
             seen_n += 1
-            if mm and not getattr(mm, "empty", False) and _has_media(mm):
-                got.append(mm.id)
+            if mm and not getattr(mm, "empty", False):
+                all_ids.append(mm.id)
+                if len(sample) < 5:
+                    sample.append("%s:%s" % (mm.id, getattr(mm, "media", None)))
+                if _has_media(mm):
+                    got.append(mm.id)
             if seen_n % 200 == 0:
                 if on_progress:
                     try:
@@ -1189,8 +1193,42 @@ async def scan_topic(chat, topic_id, start_id, need, on_progress=None):
         return None
 
     got = sorted(set(got))
-    log.info("scan_topic: topic=%s me %s media mile (scanned=%s)",
-             topic_id, len(got), seen_n)
+    all_ids = sorted(set(all_ids))
+    log.info("scan_topic: topic=%s me %s media / %s msgs (scanned=%s) sample=%s",
+             topic_id, len(got), len(all_ids), seen_n, ",".join(sample))
+
+    # GetReplies kabhi-kabhi adhoore Message objects deta hai (media field khali).
+    # Us case me sirf IDs le kar full messages fetch karo — ye 1-2 RPC call hai.
+    if not got and all_ids:
+        log.info("scan_topic: inline media 0 — %s ids full-fetch kar rahe", len(all_ids))
+        for i in range(0, len(all_ids), 100):
+            chunk = all_ids[i:i + 100]
+            for _a in range(3):
+                try:
+                    full = await USERBOT.get_messages(chat, chunk)
+                    if not isinstance(full, (list, tuple)):
+                        full = [full]
+                    for fm in full:
+                        if fm and not getattr(fm, "empty", False) and _has_media(fm):
+                            got.append(fm.id)
+                    break
+                except FloodWait as fe:
+                    w = int(getattr(fe, "value", 30) or 30)
+                    log.warning("⏳ topic full-fetch FloodWait %ss", w)
+                    if w > 300:
+                        break
+                    if on_progress:
+                        try:
+                            await on_progress(len(got), chunk[0], w)
+                        except Exception:
+                            pass
+                    await asyncio.sleep(w + 2)
+                except Exception as e:
+                    log.warning("topic full-fetch fail: %s", e)
+                    break
+        got = sorted(set(got))
+        log.info("scan_topic: full-fetch ke baad %s media mile", len(got))
+
     if not got:
         return None
     fwd = [i for i in got if i >= start_id]
