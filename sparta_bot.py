@@ -1157,11 +1157,31 @@ async def scan_forward(chat, start_id, need, cap=5000, on_progress=None):
     out = []
     cid = start_id
     end = start_id + cap
+    empty_rounds = 0
     while len(out) < need and cid <= end:
         batch = list(range(cid, min(cid + 100, end + 1)))
-        try:
-            msgs = await USERBOT.get_messages(chat, batch)
-        except Exception:
+        msgs = None
+        for _a in range(3):                      # flood pe ruk kar retry
+            try:
+                msgs = await USERBOT.get_messages(chat, batch)
+                break
+            except FloodWait as fe:
+                w = int(getattr(fe, "value", 30) or 30)
+                log.warning("⏳ scan FloodWait %ss (ids %s-%s) — wait karke retry",
+                            w, batch[0], batch[-1])
+                if w > 300:
+                    return out[:need]
+                await asyncio.sleep(w + 2)
+                if on_progress:
+                    try:
+                        await on_progress(len(out), cid, w)
+                    except Exception:
+                        pass
+            except Exception as e:
+                log.warning("scan_forward get_messages fail (ids %s-%s): %s",
+                            batch[0], batch[-1], e)
+                break
+        if msgs is None:
             break
         if not isinstance(msgs, (list, tuple)):
             msgs = [msgs]
@@ -1172,7 +1192,12 @@ async def scan_forward(chat, start_id, need, cap=5000, on_progress=None):
                 if _has_media(mm):
                     out.append((chat, mm.id))
         if alive == 0:
-            break                      # channel/topic khatam
+            empty_rounds += 1
+            if empty_rounds >= 3:      # 300 messages tak kuch nahi = khatam
+                log.info("scan_forward: %s ke baad koi message nahi", cid)
+                break
+        else:
+            empty_rounds = 0
         cid = batch[-1] + 1
         if on_progress:
             try:
@@ -2382,12 +2407,14 @@ async def on_plain_text(c, m: Message):
                             f"🔍 Link ke neeche scan kar raha hoon… ⏳\n"
                             f"📚 Mili: <b>0/{n}</b> files")
 
-                        async def _pf(found, upto):
+                        async def _pf(found, upto, flood=0):
                             try:
                                 await probe.edit_text(
                                     f"🔍 Link ke neeche scan chal raha hai… ⏳\n"
                                     f"📚 Mili: <b>{found}/{n}</b> files\n"
-                                    f"💬 Check hue: {max(0, upto - st['start'])} messages")
+                                    f"💬 Check hue: {max(0, upto - st['start'])} messages"
+                                    + (f"\n⏳ Telegram ne {flood}s wait diya — "
+                                       f"apne aap resume hoga 🫧" if flood else ""))
                             except Exception:
                                 pass
 
@@ -3232,12 +3259,14 @@ async def cb_ask(c, q: CallbackQuery):
             except Exception:
                 pass
 
-            async def _pf2(found, upto):
+            async def _pf2(found, upto, flood=0):
                 try:
                     await q.message.edit_text(
                         f"🔍 Link ke neeche scan chal raha hai… ⏳\n"
                         f"📚 Mili: <b>{found}/{n}</b> files\n"
-                        f"💬 Check hue: {max(0, upto - st['start'])} messages")
+                        f"💬 Check hue: {max(0, upto - st['start'])} messages"
+                        + (f"\n⏳ Telegram ne {flood}s wait diya — "
+                           f"apne aap resume hoga 🫧" if flood else ""))
                 except Exception:
                     pass
 
