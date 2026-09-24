@@ -1157,6 +1157,27 @@ def kb_ask(mx):
     return InlineKeyboardMarkup(rows)
 
 
+async def _raw_diag(chat, ids):
+    """pyrogram ko media None dikhe to SEEDHA MTProto se pucho — asli sach.
+
+    Purani pyrogram naye media types (paid media, nayi attributes) parse
+    nahi kar pati aur chupchap media=None de deti hai. Ye log batayega.
+    """
+    try:
+        from pyrogram.raw.functions.channels import GetMessages as _RG
+        from pyrogram.raw.types import InputMessageID
+        peer = await USERBOT.resolve_peer(chat)
+        r = await USERBOT.invoke(_RG(channel=peer,
+                                     id=[InputMessageID(id=i) for i in ids]))
+        for mm in getattr(r, "messages", []):
+            md = getattr(mm, "media", None)
+            log.warning("🔬 RAW id=%s cls=%s media=%s",
+                        getattr(mm, "id", "?"), type(mm).__name__,
+                        type(md).__name__ if md else None)
+    except Exception as e:
+        log.warning("raw diag fail: %s", e)
+
+
 async def scan_topic(chat, topic_id, start_id, need, on_progress=None):
     """Forum TOPIC ke andar hi media dhoondo (id-range scan ki jagah).
 
@@ -1231,6 +1252,8 @@ async def scan_topic(chat, topic_id, start_id, need, on_progress=None):
                     break
         got = sorted(set(got))
         log.info("scan_topic: full-fetch ke baad %s media mile", len(got))
+        if not got:
+            await _raw_diag(chat, all_ids[:3])
 
     if not got:
         return None
