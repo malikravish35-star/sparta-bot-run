@@ -83,7 +83,8 @@ try:
     from pyrogram import Client, filters, enums, idle
     from pyrogram.errors import (
         FloodWait, UserIsBlocked, PeerIdInvalid, ChatWriteForbidden,
-        MessageNotModified, RPCError,
+        MessageNotModified, RPCError, UserAlreadyParticipant,
+        InviteHashExpired,
     )
     from pyrogram.handlers import MessageHandler, CallbackQueryHandler
     from pyrogram.types import (
@@ -201,7 +202,7 @@ UB_DELAY       = float(_get("USERBOT_DELAY", 0.0))     # per-file extra sleep ha
 BOT_SEND_GAP   = float(_get("BOT_SEND_GAP", 0.12))     # global throttle (adaptive, flood-safe)
 UB_TRANSMISSIONS = int(_get("UB_TRANSMISSIONS", 12))   # userbot ke parallel DC streams
 SEQ_TIMEOUT    = int(_get("SEQ_TIMEOUT", 1800))        # sequence gate max wait (stuck-proof)
-PEER_SCAN_MAX  = int(_get("PEER_SCAN_MAX", 40))        # dialogs scan max seconds (hang-proof)
+PEER_SCAN_MAX  = int(_get("PEER_SCAN_MAX", 90))        # dialogs scan max seconds (hang-proof)
 SCAN_NO_HIST   = _get("SCAN_NO_HIST", "0") == "1"      # 1 = history method off
 TOPIC_SCAN_MAX = int(os.getenv("TOPIC_SCAN_MAX", "4000"))
 FLOOD_MAX_WAIT = int(_get("FLOOD_MAX_WAIT", 900))    # itne sec tak flood = wait + retry
@@ -600,7 +601,7 @@ def throttle_backoff(wait_s):
     _GAP["cur"] = min(2.0, max(_GAP["cur"] * 2, 0.4))
 PEER_OK = set()          # jin chats ka access hash mil chuka
 PEER_BAD = {}            # id -> ts (member nahi / resolve fail; 10 min yaad rakho)
-WARM_DIALOGS = int(_get("WARM_DIALOGS", 300))
+WARM_DIALOGS = int(_get("WARM_DIALOGS", 5000))
 INDEX_STATE = {"running": False, "count": 0, "last": 0}
 BUSY, LAST_SEARCH = set(), {}
 BUSY_INFO = {}        # chat_id -> {"task","uid","ts"} — cancel button ke liye
@@ -1011,14 +1012,15 @@ async def ensure_peer(chat_id) -> bool:
         return True                      # username khud resolve ho jata hai
     if chat_id in PEER_OK:
         return True
-    if time.time() - PEER_BAD.get(chat_id, 0) < 600:
+    if time.time() - PEER_BAD.get(chat_id, 0) < 120:
         return False
-    try:
-        await USERBOT.get_chat(chat_id)
-        PEER_OK.add(chat_id)
-        return True
-    except Exception:
-        pass
+    for _fn in ("get_chat", "resolve_peer"):
+        try:
+            await getattr(USERBOT, _fn)(chat_id)
+            PEER_OK.add(chat_id)
+            return True
+        except Exception:
+            pass
     for attempt in range(2):
         try:
             n = 0
@@ -1029,7 +1031,7 @@ async def ensure_peer(chat_id) -> bool:
                     PEER_OK.add(chat_id)
                     log.info("🔑 peer resolve via dialogs: %s (%s)", chat_id, d.chat.title)
                     return True
-                if n >= 1000 or time.time() - t_start > PEER_SCAN_MAX:
+                if n >= 5000 or time.time() - t_start > PEER_SCAN_MAX:
                     log.warning("peer scan timeout: %s dialogs %.0fs", n, time.time() - t_start)
                     break
             break
@@ -1805,11 +1807,16 @@ async def handle_links(m: Message, pairs, _from_ask=False, _user=None, _total=No
             _ok = False
         if not _ok:
             busy_del(chat_id)
-            _t = ("🔒 <b>Is chat tak access nahi mila!</b>\n\n"
-                  "Wajah ho sakti hai:\n"
-                  "• Aap (userbot) us group/channel me <b>member nahi ho</b>\n"
-                  "• Chat private hai ya link purana hai\n\n"
-                  "📌 Pehle join karo, fir link dobara bhejo 🫧")
+            _t = (f"🔒 <b>IS CHAT TAK ACCESS NAHI</b>\n"
+                  f"━━━━━━━━━━━━━━━━━━━\n"
+                  f"🆔 <code>{chat}</code>\n\n"
+                  f"❗ Main (<b>@{(USERBOT_ME.username if USERBOT_ME else 'userbot')}</b>) "
+                  f"is group/channel ka <b>member nahi hoon</b>.\n\n"
+                  f"✅ <b>2 me se koi ek karo:</b>\n"
+                  f"1️⃣ Us group ka <b>invite link</b> yahan bhejo\n"
+                  f"    (<code>t.me/+xxxxx</code>) — main khud join kar lunga ⚡\n"
+                  f"2️⃣ Ya mujhe us group me <b>add</b> kar do\n\n"
+                  f"📌 Uske baad post link dobara bhejo 🫧")
             if ack:
                 try:
                     return await ack.edit_text(_t)
@@ -2558,6 +2565,25 @@ async def cmd_setdb(c, m: Message):
 
 @handler(filters.private & filters.text & ~filters.command(CMD_BLOCK, prefixes="/"))
 async def on_plain_text(c, m: Message):
+    # ★ INVITE LINK -> userbot ko group me join karao (warna us group se
+    # files nikal hi nahi sakte). t.me/+hash ya t.me/joinchat/hash
+    _inv = re.search(r"(?:t\.me/\+|t\.me/joinchat/)([\w-]+)", m.text or "")
+    if _inv and USERBOT_OK:
+        _w = await m.reply_text("🔗 Invite link mila — join kar raha hoon… 🫧")
+        try:
+            _ch = await USERBOT.join_chat(m.text.strip().split()[0])
+            PEER_OK.add(_ch.id)
+            return await _w.edit_text(
+                f"✅ <b>JOIN HO GAYA!</b>\n📛 {_ch.title}\n\n"
+                f"Ab is group ka koi bhi <b>post link</b> bhejo — file nikal dunga ⚡")
+        except UserAlreadyParticipant:
+            return await _w.edit_text("✅ Is group me pehle se joined hoon — "
+                                      "seedha post ka link bhejo 🫧")
+        except InviteHashExpired:
+            return await _w.edit_text("❌ Ye invite link <b>expire</b> ho gaya — naya bhejo")
+        except Exception as _e:
+            return await _w.edit_text(f"❌ Join nahi ho paya: <code>{_e}</code>")
+
     """Seedha text = search query. Pending buy ho to payment proof samjho."""
     txt = (m.text or "").strip()
     uid = m.from_user.id
