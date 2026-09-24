@@ -1091,11 +1091,26 @@ async def warm_peer_cache():
 
 
 async def ub_ready():
+    # user ne khud /login kiya hai -> uske liye sab ready hai
+    # (us case me cache channel ki bhi zaroorat nahi, direct delivery hoti hai)
+    if _UB_CTX.get() is not None:
+        return True
     return bool(USERBOT_OK and USERBOT and CACHE_CHANNEL)
 
 
 async def link_error_msg():
+    if _UB_CTX.get() is not None:
+        return ""
     if not USERBOT_OK:
+        return (
+            "🔐 <b>PEHLE LOGIN KARO</b>\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "Link se file nikalne ke liye apne Telegram account se login "
+            "karna hoga — phir <b>aapke saare groups</b> se files milengi ⚡\n\n"
+            "👉 Bas <b>/login</b> bhejo (1 minute ka kaam)\n\n"
+            "🔒 Aapki session sirf aapke liye use hoti hai.\n"
+            "❓ Dikkat aaye to admin: @THE_SPARTAN_300")
+    if False:
         return (
             "⚠️ <b>Link mode abhi ready nahi hai</b>\n\n"
             "Kisi bhi group/channel ke link se file nikalne ke liye bot ke paas "
