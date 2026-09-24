@@ -1372,6 +1372,27 @@ def _media_size(src):
     return 0
 
 
+async def _grab_thumb(src):
+    """Source message ki ORIGINAL thumbnail download karo -> file path.
+
+    Video/document/audio/animation sab pe thumbs list hoti hai; sabse badi
+    lete hain taaki quality achhi rahe. Fail ho to None (koi crash nahi).
+    """
+    for attr in ("video", "document", "audio", "animation", "video_note"):
+        o = getattr(src, attr, None)
+        thumbs = getattr(o, "thumbs", None) if o else None
+        if thumbs:
+            try:
+                return await USERBOT.download_media(
+                    thumbs[-1].file_id,
+                    file_name=os.path.join(THUMB_DIR_TMP,
+                                           f"th_{src.id}_{int(time.time()*1000)}.jpg"))
+            except Exception as e:
+                log.warning("thumb download fail: %s", e)
+            return None
+    return None
+
+
 async def _reupload_via_download(src, msg_id):
     """Noforwards channel se file: DISK pe download -> cache me fresh upload.
 
@@ -1417,19 +1438,45 @@ async def _reupload_via_download(src, msg_id):
                     or f"file_{msg_id}")
             ck = dict(caption=src.caption or None,
                       caption_entities=src.caption_entities or None)
-            if src.video:
-                return await USERBOT.send_video(CACHE_CHANNEL, path, file_name=name, **ck)
-            if src.photo:
-                return await USERBOT.send_photo(CACHE_CHANNEL, path, **ck)
-            if src.audio:
-                return await USERBOT.send_audio(CACHE_CHANNEL, path, file_name=name, **ck)
-            if src.voice:
-                return await USERBOT.send_voice(CACHE_CHANNEL, path, **ck)
-            if src.animation:
-                return await USERBOT.send_animation(CACHE_CHANNEL, path, file_name=name, **ck)
-            if src.video_note:
-                return await USERBOT.send_video_note(CACHE_CHANNEL, path)
-            return await USERBOT.send_document(CACHE_CHANNEL, path, file_name=name, **ck)
+            # ★ ORIGINAL THUMBNAIL: re-upload me Telegram apne aap thumb nahi
+            # rakhta (kaali screen aa jaati hai). Isliye source ki thumb
+            # download karke saath bhejte hain + video ke attributes bhi.
+            thp = await _grab_thumb(src)
+            try:
+                if src.video:
+                    v = src.video
+                    return await USERBOT.send_video(
+                        CACHE_CHANNEL, path, file_name=name, thumb=thp,
+                        duration=v.duration or 0, width=v.width or 0,
+                        height=v.height or 0, supports_streaming=True, **ck)
+                if src.photo:
+                    return await USERBOT.send_photo(CACHE_CHANNEL, path, **ck)
+                if src.audio:
+                    a = src.audio
+                    return await USERBOT.send_audio(
+                        CACHE_CHANNEL, path, file_name=name, thumb=thp,
+                        duration=a.duration or 0, performer=a.performer,
+                        title=a.title, **ck)
+                if src.voice:
+                    return await USERBOT.send_voice(CACHE_CHANNEL, path, **ck)
+                if src.animation:
+                    an = src.animation
+                    return await USERBOT.send_animation(
+                        CACHE_CHANNEL, path, file_name=name, thumb=thp,
+                        duration=an.duration or 0, width=an.width or 0,
+                        height=an.height or 0, **ck)
+                if src.video_note:
+                    return await USERBOT.send_video_note(CACHE_CHANNEL, path,
+                                                         thumb=thp)
+                return await USERBOT.send_document(CACHE_CHANNEL, path,
+                                                   file_name=name, thumb=thp,
+                                                   **ck)
+            finally:
+                if thp:
+                    try:
+                        os.remove(thp)
+                    except Exception:
+                        pass
         finally:
             DL_PROG.pop(dlkey, None)
             try:
@@ -1441,6 +1488,8 @@ async def _reupload_via_download(src, msg_id):
 # ══════════════════ CUSTOM THUMBNAIL + CAPTION ENGINE ════════════════════
 USER_SET   = {}        # uid -> settings dict (memory cache)
 THUMB_DIR  = "/tmp/thumbs"
+THUMB_DIR_TMP = "/tmp/srcthumbs"
+os.makedirs(THUMB_DIR_TMP, exist_ok=True)
 SET_WAIT   = {}        # uid -> "caption" | "cut" | "prefix" | "suffix" | "rename"
 
 DEFAULT_SET = {
