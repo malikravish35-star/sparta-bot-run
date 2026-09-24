@@ -2381,7 +2381,7 @@ CMD_BLOCK = ["start", "help", "id", "search", "plans", "buy", "myplan", "stats",
              "setcache", "link", "status",
              "forward", "cancel", "index", "reindex", "approve", "reject", "setplan",
              "removeplan", "user", "find", "reqs", "usage", "broadcast", "del", "ping",
-             "settings", "setting", "custom", "raw"]
+             "settings", "setting", "custom", "raw", "vj"]
 
 # ─────────────────────────────── USER: start / help / id ────────────────────
 
@@ -2860,6 +2860,110 @@ async def cmd_raw(c, m: Message):
     except Exception as e:
         out.append(f"\nraw fail: <code>{e}</code>")
     await m.reply_text("\n".join(out)[:4000])
+
+
+@handler(filters.command("vj") & filters.private)
+async def cmd_vj(c, m: Message):
+    """VJ-style: link se SEEDHA id-by-id chalo, koi scan/filter nahi.
+
+    /vj <link>          -> us link se 20 messages aage
+    /vj <link> 100      -> 100 messages aage
+    /vj <link> 9284-9400-> exact range
+    Har message pe jo mile wo bhej deta hai; text/khali chupchap skip.
+    """
+    parts = (m.text or "").split()
+    pairs = parse_links(m.text or "")
+    if not pairs:
+        return await m.reply_text(
+            "🔧 <b>VJ MODE</b>\n━━━━━━━━━━━━━━━\n"
+            "<code>/vj &lt;link&gt;</code>          → 20 messages aage\n"
+            "<code>/vj &lt;link&gt; 100</code>      → 100 messages aage\n"
+            "<code>/vj &lt;link&gt; 9284-9400</code> → exact range\n\n"
+            "Ye mode <b>kuch bhi filter nahi karta</b> — ek-ek message khud "
+            "kholta hai aur jo file mile bhej deta hai 🫧")
+
+    chat, start = pairs[0]
+    to_id = None
+    for tok in parts[1:]:
+        if "-" in tok and all(x.strip().isdigit() for x in tok.split("-", 1)):
+            a, b = tok.split("-", 1)
+            start, to_id = int(a), int(b)
+        elif tok.isdigit():
+            to_id = start + int(tok) - 1
+    if to_id is None:
+        to_id = start + 19
+    to_id = min(to_id, start + 999)
+
+    u = await get_user(m.from_user, m.chat.id)
+    lim = user_limit(u)
+
+    await ensure_peer(chat)
+    bar = await m.reply_text(
+        f"🔧 <b>VJ MODE</b>\n━━━━━━━━━━━━━━━\n"
+        f"🆔 <code>{chat}</code>\n📍 {start} → {to_id}\n\n⏳ Shuru…")
+
+    VJ_CANCEL.discard(m.from_user.id)
+    stats, sent, skipped, fail = {}, 0, 0, 0
+    t0 = time.time()
+    lines = []
+    st = await get_set(m.from_user.id)
+
+    for i, mid in enumerate(range(start, to_id + 1)):
+        if m.from_user.id in VJ_CANCEL:
+            lines.append("🛑 cancel")
+            break
+        if sent >= lim:
+            lines.append(f"🎯 limit {lim} pura")
+            break
+        try:
+            ok, title, why = await fetch_one(chat, mid, m.chat.id, stats, st)
+        except Exception as e:
+            ok, title, why = False, "", str(e)[:60]
+        if ok:
+            sent += 1
+        elif why and ("file nahi hai" in why or "nahi mila" in why):
+            skipped += 1
+        else:
+            fail += 1
+            if len(lines) < 6:
+                lines.append(f"⚠️ {mid}: {why}")
+
+        if i % 3 == 0 or mid == to_id:
+            done = mid - start + 1
+            tot = to_id - start + 1
+            fill = int(done * 12 / max(tot, 1))
+            el = time.time() - t0
+            try:
+                await bar.edit_text(
+                    f"🔧 <b>VJ MODE</b>\n━━━━━━━━━━━━━━━\n"
+                    f"[{'█'*fill}{'░'*(12-fill)}] {done}/{tot}\n\n"
+                    f"📦 Bheji   : <b>{sent}</b>\n"
+                    f"⏭️ Skip    : {skipped} (text/khali)\n"
+                    f"⚠️ Fail    : {fail}\n"
+                    f"⏱️ {el:.0f}s\n"
+                    + ("\n" + "\n".join(lines) if lines else ""),
+                    reply_markup=InlineKeyboardMarkup(
+                        [[InlineKeyboardButton("🛑 Cancel", callback_data="vj:cancel")]]))
+            except Exception:
+                pass
+
+    await bar.edit_text(
+        f"🙏 <b>THANK YOU FOR CHOOSING SPARTA-BOT!</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"🔧 Mode      : VJ (id-by-id)\n"
+        f"📍 Range     : {start} → {to_id}\n"
+        f"📦 Files Sent: <b>{sent}</b>\n"
+        f"⏭️ Skipped   : {skipped} (koi file nahi thi)\n"
+        f"⚠️ Fail      : {fail}\n"
+        f"⏱️ Time      : {time.time()-t0:.1f}s\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        + ("\n".join(lines) if lines else "") +
+        ("\n\n❤️ Share SPARTA-BOT!" if sent else
+         "\n\n💡 Is range me koi file nahi mili — range badhao: "
+         f"<code>/vj &lt;link&gt; 200</code>"))
+
+
+VJ_CANCEL = set()
 
 
 @handler(filters.command("setcache") & is_admin)
@@ -3511,6 +3615,12 @@ async def cb_menu_settings(c, q: CallbackQuery):
         await q.message.edit_text(_set_txt(st), reply_markup=_set_kb(st))
     except Exception:
         await q.message.reply_text(_set_txt(st), reply_markup=_set_kb(st))
+
+
+@handler(filters.regex(r"^vj:"), kind="callback")
+async def cb_vj(c, q: CallbackQuery):
+    VJ_CANCEL.add(q.from_user.id)
+    await q.answer("🛑 Ruk raha hoon…", show_alert=False)
 
 
 @handler(filters.regex(r"^menu:"), kind="callback")
