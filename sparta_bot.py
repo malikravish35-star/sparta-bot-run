@@ -2372,7 +2372,11 @@ async def on_plain_text(c, m: Message):
                 ASK_PENDING.pop(m.chat.id, None)
                 if st.get("mode") == "fwd":
                     if n == 1:
-                        sel = [(st["chat"], st["start"])]
+                        # exact message me file na ho (topic header / text) to
+                        # usi jagah se neeche pehli file utha lo
+                        sel = await scan_forward(st["chat"], st["start"], 1)
+                        if not sel:
+                            sel = [(st["chat"], st["start"])]
                     else:
                         probe = await m.reply_text(
                             f"🔍 Link ke neeche scan kar raha hoon… ⏳\n"
@@ -3216,7 +3220,9 @@ async def cb_ask(c, q: CallbackQuery):
         u2 = await get_user(q.from_user, chat_id)
         n = max(1, min(n, user_limit(u2)))
         if n == 1:
-            sel = [(st["chat"], st["start"])]
+            sel = await scan_forward(st["chat"], st["start"], 1)
+            if not sel:
+                sel = [(st["chat"], st["start"])]
         else:
             await q.answer(f"🔍 {n} files dhundh raha hoon…")
             try:
