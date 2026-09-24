@@ -202,6 +202,7 @@ BOT_SEND_GAP   = float(_get("BOT_SEND_GAP", 0.12))     # global throttle (adapti
 UB_TRANSMISSIONS = int(_get("UB_TRANSMISSIONS", 12))   # userbot ke parallel DC streams
 SEQ_TIMEOUT    = int(_get("SEQ_TIMEOUT", 1800))        # sequence gate max wait (stuck-proof)
 PEER_SCAN_MAX  = int(_get("PEER_SCAN_MAX", 40))        # dialogs scan max seconds (hang-proof)
+SCAN_NO_HIST   = _get("SCAN_NO_HIST", "0") == "1"      # 1 = history method off
 FLOOD_MAX_WAIT = int(_get("FLOOD_MAX_WAIT", 900))    # itne sec tak flood = wait + retry
 MAX_RANGE      = int(_get("MAX_RANGE", 500))             # t.me/x/10-510 range cap
 LINK_MODE      = _get("LINK_MODE", "1") == "1"
@@ -1161,7 +1162,25 @@ async def scan_forward(chat, start_id, need, cap=5000, on_progress=None):
     while len(out) < need and cid <= end:
         batch = list(range(cid, min(cid + 100, end + 1)))
         msgs = None
-        for _a in range(3):                      # flood pe ruk kar retry
+        # PEHLE history method (messages.GetHistory) — ye alag RPC hai aur
+        # channels.GetMessages jaisa flood-limited nahi hota. Isse scan
+        # tab bhi chalta hai jab GetMessages pe 30s ka rate-limit laga ho.
+        if not SCAN_NO_HIST:
+            try:
+                hist = []
+                async for _mm in USERBOT.get_chat_history(
+                        chat, limit=len(batch), offset_id=batch[-1] + 1):
+                    if _mm and _mm.id < batch[0]:
+                        break
+                    hist.append(_mm)
+                if hist:
+                    msgs = hist
+            except FloodWait as fe:
+                w = int(getattr(fe, "value", 30) or 30)
+                log.warning("⏳ history FloodWait %ss — GetMessages pe switch", w)
+            except Exception as e:
+                log.warning("history scan fail (%s) — GetMessages pe switch", e)
+        for _a in range(3 if msgs is None else 0):   # fallback: GetMessages
             try:
                 msgs = await USERBOT.get_messages(chat, batch)
                 break
@@ -1482,7 +1501,10 @@ async def _fetch_one_try(chat, msg_id, dest_chat, stats, st=None):
             title = clean_title(src)
 
             try:
-                ids = await USERBOT.copy_message(CACHE_CHANNEL, chat, msg_id)
+                # src pehle hi fetch ho chuka hai -> src.copy() use karo.
+                # copy_message() andar se dobara GetMessages maarta hai, jo
+                # flood-limited RPC hai (har file pe 2 calls = double flood).
+                ids = await src.copy(CACHE_CHANNEL)
             except RPCError as ce:
                 if "CHAT_FORWARDS_RESTRICTED" in str(ce):
                     # channel me "restrict saving content" ON hai -> copy blocked.
