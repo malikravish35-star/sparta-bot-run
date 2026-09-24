@@ -813,8 +813,7 @@ async def get_user(user, chat_id=None):
             try:
                 await CLIENT.send_message(
                     LOG_CHANNEL,
-                    f"🆕 <b>New User</b>\n👤 {username_link(user)}\n🔗 <code>{uid}</code>",
-                    disable_web_page_preview=True)
+                    f"🆕 <b>New User</b>\n👤 {username_link(user)}\n🔗 <code>{uid}</code>")
             except Exception:
                 pass
     else:
@@ -2192,9 +2191,9 @@ async def handle_links(m: Message, pairs, _from_ask=False, _user=None, _total=No
             f"• {esc(k)} — {v} files" for k, v in top)
 
     try:
-        await status.edit_text(body, reply_markup=kb, disable_web_page_preview=True)
+        await status.edit_text(body, reply_markup=kb)
     except Exception:
-        await m.reply_text(body, reply_markup=kb, disable_web_page_preview=True)
+        await m.reply_text(body, reply_markup=kb)
 
     log.info("LINKS uid=%s total=%s sent=%s fail=%s %.2fs",
              uid, total_links, sent, stats["fail"], time.time() - t0)
@@ -2306,8 +2305,7 @@ async def send_result_batches(chat_id, results, query):
         async with SEM_SEND:
             for attempt in range(3):
                 try:
-                    await CLIENT.send_message(chat_id, "\n".join(lines),
-                                              disable_web_page_preview=True)
+                    await CLIENT.send_message(chat_id, "\n".join(lines))
                     async with lock:
                         sent_msgs += 1
                     return
@@ -2535,13 +2533,12 @@ CMD_BLOCK = ["start", "help", "id", "search", "plans", "buy", "myplan", "stats",
 @handler(filters.command("start") & filters.private)
 async def cmd_start(c, m: Message):
     u = await get_user(m.from_user, m.chat.id)
-    await m.reply_text(start_txt(u, m.from_user), reply_markup=kb_main(),
-                       disable_web_page_preview=True)
+    await m.reply_text(start_txt(u, m.from_user), reply_markup=kb_main())
 
 
 @handler(filters.command("help") & filters.private)
 async def cmd_help(c, m: Message):
-    await m.reply_text(HELP_TXT, disable_web_page_preview=True)
+    await m.reply_text(HELP_TXT)
 
 
 @handler(filters.command("id"))
@@ -2659,7 +2656,7 @@ async def admin_forward_detect(c, m: Message):
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🗄️ CACHE banao (link mode)", callback_data=f"setascache:{cid}")],
             [InlineKeyboardButton("📢 DB banao (search mode)", callback_data=f"setasdb:{cid}")],
-        ]), disable_web_page_preview=True)
+        ]))
 
 
 @handler(filters.regex(r"^setas(db|cache):"), kind="callback")
@@ -2709,8 +2706,7 @@ async def set_cache_channel(m: Message, cid: int):
            if ready else
            "⚠️ Abhi <b>userbot session</b> chahiye link mode ke liye:\n"
            "<code>python3 userbot_login.py send +91XXXXXXXXXX</code>\n"
-           "fir OTP se session banao. Uske baad link mode chalu ✅"),
-        disable_web_page_preview=True)
+           "fir OTP se session banao. Uske baad link mode chalu ✅"))
 
 
 @handler(filters.command("setdb") & is_admin)
@@ -2931,11 +2927,11 @@ async def handle_search(m: Message, query: str):
 
         if status is not None:
             try:
-                await status.edit_text(body, reply_markup=kb, disable_web_page_preview=True)
+                await status.edit_text(body, reply_markup=kb)
             except Exception:
-                await m.reply_text(body, reply_markup=kb, disable_web_page_preview=True)
+                await m.reply_text(body, reply_markup=kb)
         else:
-            await m.reply_text(body, reply_markup=kb, disable_web_page_preview=True)
+            await m.reply_text(body, reply_markup=kb)
 
         log.info("SEARCH uid=%s q=%r sent=%s/%s %.2fs src=%s",
                  uid, query[:30], sent, total, time.time() - t0, src)
@@ -3324,7 +3320,7 @@ async def cmd_status(c, m: Message):
         lines.append("👉 Baaki: " + ", ".join(miss))
     u = await get_user(m.from_user, m.chat.id)
     lines += ["", f"🎯 Aapka limit : <b>{user_limit(u)} files</b> ({plan_label(u)})"]
-    await m.reply_text("\n".join(lines), disable_web_page_preview=True)
+    await m.reply_text("\n".join(lines))
 
 
 @handler(filters.command("forward") & filters.private)
@@ -3344,13 +3340,13 @@ async def cmd_forward(c, m: Message):
 @handler(filters.command("plans") & filters.private)
 async def cmd_plans(c, m: Message):
     u = await get_user(m.from_user, m.chat.id)
-    await m.reply_text(plans_txt(u), reply_markup=kb_plans(), disable_web_page_preview=True)
+    await m.reply_text(plans_txt(u), reply_markup=kb_plans())
 
 
 @handler(filters.command("buy") & filters.private)
 async def cmd_buy(c, m: Message):
     await m.reply_text("🛒 <b>BUY PREMIUM</b>\n\nNiche se apna plan chuno 👇",
-                       reply_markup=kb_plans(), disable_web_page_preview=True)
+                       reply_markup=kb_plans())
 
 
 @handler(filters.command("myplan") & filters.private)
@@ -3370,8 +3366,7 @@ async def cmd_myplan(c, m: Message):
         f"📤 Forward   : {'ON' if u.get('forward') else 'OFF'}\n"
         f"━━━━━━━━━━━━━━━━━━━\n\n"
         f"🆓 Free limit: {FREE_LIMIT} files  •  💎 Upgrade: /plans",
-        reply_markup=None if u["user_id"] in ADMINS else kb_plans(),
-        disable_web_page_preview=True)
+        reply_markup=None if u["user_id"] in ADMINS else kb_plans())
 
 
 @handler(filters.command("stats") & filters.private)
@@ -3634,7 +3629,7 @@ async def cmd_broadcast(c, m: Message):
     for u in users:
         try:
             if txt:
-                await CLIENT.send_message(u["user_id"], txt, disable_web_page_preview=True)
+                await CLIENT.send_message(u["user_id"], txt)
             else:
                 await rep.copy(u["user_id"])
             ok += 1
@@ -4002,8 +3997,7 @@ async def cb_menu(c, q: CallbackQuery):
     msg = q.message
 
     if act == "start":
-        await msg.edit_text(start_txt(u, q.from_user), reply_markup=kb_main(),
-                            disable_web_page_preview=True)
+        await msg.edit_text(start_txt(u, q.from_user), reply_markup=kb_main())
     elif act == "search":
         await msg.edit_text(
             "🔎 <b>SEARCH MODE ON</b>\n\nAb file ka naam type karo 👇\n"
@@ -4012,13 +4006,12 @@ async def cb_menu(c, q: CallbackQuery):
                 [[InlineKeyboardButton("💎 Upgrade Limit", callback_data="menu:plans"),
                   InlineKeyboardButton("🔙 Back", callback_data="menu:start")]]))
     elif act == "plans":
-        await msg.edit_text(plans_txt(u), reply_markup=kb_plans(),
-                            disable_web_page_preview=True)
+        await msg.edit_text(plans_txt(u), reply_markup=kb_plans())
     elif act == "buy":
         await msg.edit_text(
             "🛒 <b>BUY PREMIUM</b>\n\nApna plan chuno 👇\n\n"
             f"💳 Payment : <code>{esc(PAYMENT_INFO)}</code>",
-            reply_markup=kb_plans(), disable_web_page_preview=True)
+            reply_markup=kb_plans())
     elif act == "myplan":
         left = ""
         if u.get("expiry") and u["expiry"] > time.time():
@@ -4049,7 +4042,7 @@ async def cb_menu(c, q: CallbackQuery):
             reply_markup=InlineKeyboardMarkup(
                 [[InlineKeyboardButton("🔙 Back", callback_data="menu:start")]]))
     elif act == "help":
-        await msg.edit_text(HELP_TXT, disable_web_page_preview=True,
+        await msg.edit_text(HELP_TXT,
                             reply_markup=InlineKeyboardMarkup(
                                 [[InlineKeyboardButton("🔙 Back", callback_data="menu:start")]]))
     await q.answer()
@@ -4076,8 +4069,7 @@ async def cb_buy(c, q: CallbackQuery):
         f"📸 Payment ke baad <b>screenshot ya UTR</b> isi bot ko bhej do.\n"
         f"Admin approve karte hi plan <b>instantly</b> active ⚡\n\n📞 Help: {SUPPORT_TXT}",
         reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton("🔙 Plans", callback_data="menu:plans")]]),
-        disable_web_page_preview=True)
+            [[InlineKeyboardButton("🔙 Plans", callback_data="menu:plans")]]))
 
     for target in filter(None, [ADMIN_ID, LOG_CHANNEL]):
         try:
@@ -4453,6 +4445,30 @@ async def main():
         raise SystemExit(1)
     me = await CLIENT.get_me()
     log.info("🤖 Logged in as @%s (id=%s)", me.username, me.id)
+
+    # ── Telegram ke "/" menu me saari commands dikhao ──
+    try:
+        from pyrogram.types import BotCommand, BotCommandScopeAllPrivateChats
+        _cmds = [
+            BotCommand("start",     "🚀 Bot shuru karo"),
+            BotCommand("login",     "🔐 Apne account se login (apne groups ke liye)"),
+            BotCommand("myaccount", "👤 Kaunsa account juda hai"),
+            BotCommand("logout",    "🔓 Account hatao"),
+            BotCommand("link",      "🔗 Link se file nikalo"),
+            BotCommand("vj",        "🔧 VJ mode — id-by-id extract"),
+            BotCommand("settings",  "⚙️ Thumbnail / caption / sequence"),
+            BotCommand("cancel",    "🛑 Chalta hua task roko"),
+            BotCommand("status",    "📊 Abhi ka status"),
+            BotCommand("plans",     "💎 Premium plans"),
+            BotCommand("buy",       "🛒 Premium kharido"),
+            BotCommand("myplan",    "🎯 Mera plan / limit"),
+            BotCommand("ping",      "🏓 Bot zinda hai?"),
+            BotCommand("help",      "❓ Madad"),
+        ]
+        await CLIENT.set_bot_commands(_cmds, scope=BotCommandScopeAllPrivateChats())
+        log.info("📋 %d commands menu me set ho gayi", len(_cmds))
+    except Exception as e:
+        log.warning("set_bot_commands fail: %s", e)
     register_handlers()
     await startup_tasks()
     print(f"\n⚡ {BOT_NAME} chal raha hai… Ctrl+C se band karo.\n")
