@@ -1010,7 +1010,8 @@ async def ensure_peer(chat_id) -> bool:
     """
     if isinstance(chat_id, str):
         return True                      # username khud resolve ho jata hai
-    if chat_id in PEER_OK:
+    _pk = (id(_UB()), chat_id)
+    if _pk in PEER_OK or chat_id in PEER_OK and _UB() is USERBOT:
         return True
     if time.time() - PEER_BAD.get(chat_id, 0) < 120:
         return False
@@ -1025,10 +1026,10 @@ async def ensure_peer(chat_id) -> bool:
         try:
             n = 0
             t_start = time.time()
-            async for d in USERBOT.get_dialogs():
+            async for d in _UB().get_dialogs():
                 n += 1
                 if d.chat.id == chat_id:
-                    PEER_OK.add(chat_id)
+                    PEER_OK.add(_pk)
                     log.info("🔑 peer resolve via dialogs: %s (%s)", chat_id, d.chat.title)
                     return True
                 if n >= 5000 or time.time() - t_start > PEER_SCAN_MAX:
@@ -1075,14 +1076,14 @@ async def warm_peer_cache():
         return
     try:
         n = 0
-        async for d in USERBOT.get_dialogs():
+        async for d in _UB().get_dialogs():
             PEER_OK.add(d.chat.id)
             n += 1
             if n >= WARM_DIALOGS:
                 break
         log.info("🔑 peer cache warm: %d chats", n)
         try:
-            await USERBOT.get_chat(CACHE_CHANNEL)
+            await _UB().get_chat(CACHE_CHANNEL)
             log.info("🗄️ post-warm cache channel OK: %s", CACHE_CHANNEL)
         except Exception as e:
             log.warning("post-warm cache check fail: %s", e)
@@ -1166,8 +1167,8 @@ async def _raw_diag(chat, ids):
     try:
         from pyrogram.raw.functions.channels import GetMessages as _RG
         from pyrogram.raw.types import InputMessageID
-        peer = await USERBOT.resolve_peer(chat)
-        r = await USERBOT.invoke(_RG(channel=peer,
+        peer = await _UB().resolve_peer(chat)
+        r = await _UB().invoke(_RG(channel=peer,
                                      id=[InputMessageID(id=i) for i in ids]))
         for mm in getattr(r, "messages", []):
             md = getattr(mm, "media", None)
@@ -1188,7 +1189,7 @@ async def scan_topic(chat, topic_id, start_id, need, on_progress=None):
     """
     got, seen_n, all_ids, sample = [], 0, [], []
     try:
-        async for mm in USERBOT.get_discussion_replies(chat, topic_id):
+        async for mm in _UB().get_discussion_replies(chat, topic_id):
             seen_n += 1
             if mm and not getattr(mm, "empty", False):
                 all_ids.append(mm.id)
@@ -1229,7 +1230,7 @@ async def scan_topic(chat, topic_id, start_id, need, on_progress=None):
             chunk = all_ids[i:i + 100]
             for _a in range(3):
                 try:
-                    full = await USERBOT.get_messages(chat, chunk)
+                    full = await _UB().get_messages(chat, chunk)
                     if not isinstance(full, (list, tuple)):
                         full = [full]
                     for fm in full:
@@ -1293,7 +1294,7 @@ async def scan_forward(chat, start_id, need, cap=5000, on_progress=None,
         if not SCAN_NO_HIST:
             try:
                 hist = []
-                async for _mm in USERBOT.get_chat_history(
+                async for _mm in _UB().get_chat_history(
                         chat, limit=len(batch), offset_id=batch[-1] + 1):
                     if _mm and _mm.id < batch[0]:
                         break
@@ -1307,7 +1308,7 @@ async def scan_forward(chat, start_id, need, cap=5000, on_progress=None,
                 log.warning("history scan fail (%s) — GetMessages pe switch", e)
         for _a in range(3 if msgs is None else 0):   # fallback: GetMessages
             try:
-                msgs = await USERBOT.get_messages(chat, batch)
+                msgs = await _UB().get_messages(chat, batch)
                 break
             except FloodWait as fe:
                 w = int(getattr(fe, "value", 30) or 30)
@@ -1393,7 +1394,7 @@ async def scan_media(pairs):
         msgs = None
         for attempt in range(2):
             try:
-                msgs = await USERBOT.get_messages(chat, ids)
+                msgs = await _UB().get_messages(chat, ids)
                 break
             except Exception as e:
                 if "AUTH_KEY" in str(e).upper() and attempt == 0:
@@ -1430,7 +1431,7 @@ async def _grab_thumb(src):
         thumbs = getattr(o, "thumbs", None) if o else None
         if thumbs:
             try:
-                return await USERBOT.download_media(
+                return await _UB().download_media(
                     thumbs[-1].file_id,
                     file_name=os.path.join(THUMB_DIR_TMP,
                                            f"th_{src.id}_{int(time.time()*1000)}.jpg"))
@@ -1477,7 +1478,7 @@ async def _reupload_via_download(src, msg_id):
             # (pehle ye poore dl_timeout tak latka rehta tha = "file beech
             #  me ruk gayi")
             dl_task = asyncio.ensure_future(
-                USERBOT.download_media(src, file_name=tmp, progress=_dl_cb))
+                _UB().download_media(src, file_name=tmp, progress=_dl_cb))
 
             async def _stall_guard():
                 last, last_t = -1, time.time()
@@ -1516,30 +1517,30 @@ async def _reupload_via_download(src, msg_id):
             try:
                 if src.video:
                     v = src.video
-                    return await USERBOT.send_video(
+                    return await _UB().send_video(
                         CACHE_CHANNEL, path, file_name=name, thumb=thp,
                         duration=v.duration or 0, width=v.width or 0,
                         height=v.height or 0, supports_streaming=True, **ck)
                 if src.photo:
-                    return await USERBOT.send_photo(CACHE_CHANNEL, path, **ck)
+                    return await _UB().send_photo(CACHE_CHANNEL, path, **ck)
                 if src.audio:
                     a = src.audio
-                    return await USERBOT.send_audio(
+                    return await _UB().send_audio(
                         CACHE_CHANNEL, path, file_name=name, thumb=thp,
                         duration=a.duration or 0, performer=a.performer,
                         title=a.title, **ck)
                 if src.voice:
-                    return await USERBOT.send_voice(CACHE_CHANNEL, path, **ck)
+                    return await _UB().send_voice(CACHE_CHANNEL, path, **ck)
                 if src.animation:
                     an = src.animation
-                    return await USERBOT.send_animation(
+                    return await _UB().send_animation(
                         CACHE_CHANNEL, path, file_name=name, thumb=thp,
                         duration=an.duration or 0, width=an.width or 0,
                         height=an.height or 0, **ck)
                 if src.video_note:
-                    return await USERBOT.send_video_note(CACHE_CHANNEL, path,
+                    return await _UB().send_video_note(CACHE_CHANNEL, path,
                                                          thumb=thp)
-                return await USERBOT.send_document(CACHE_CHANNEL, path,
+                return await _UB().send_document(CACHE_CHANNEL, path,
                                                    file_name=name, thumb=thp,
                                                    **ck)
             finally:
@@ -1572,6 +1573,59 @@ DEFAULT_SET = {
     "keep_orig": True,      # original caption base rakho
     "sequence": True,       # files ORDER me bheji jaayein
 }
+
+
+# ═══════════ MULTI-ACCOUNT LOGIN ═══════════
+# Har user apne account se login kar sakta hai -> bot USKE groups se
+# files nikalta hai. Login na ho to owner ka userbot use hota hai.
+import contextvars
+_UB_CTX = contextvars.ContextVar("ub", default=None)
+USER_CLIENTS = {}        # uid -> connected Client
+LOGIN_WAIT = {}          # uid -> {"stage":..., "client":..., ...}
+
+
+def _UB():
+    """Abhi ka active userbot (user ka apna, warna owner ka)."""
+    return _UB_CTX.get() or USERBOT
+
+
+async def get_user_ub(uid):
+    """User ka apna logged-in client (agar hai). Warna None."""
+    c = USER_CLIENTS.get(uid)
+    if c is not None:
+        try:
+            if c.is_connected:
+                return c
+        except Exception:
+            pass
+        USER_CLIENTS.pop(uid, None)
+    doc = await STORE.find_one("sessions", "user_id", uid) or {}
+    ss = doc.get("session")
+    if not ss:
+        return None
+    try:
+        c = Client(f"u{uid}", api_id=API_ID, api_hash=API_HASH,
+                   session_string=ss, in_memory=True,
+                   max_concurrent_transmissions=8, sleep_threshold=25)
+        await c.start()
+        USER_CLIENTS[uid] = c
+        log.info("🔐 user %s ka apna account connected", uid)
+        return c
+    except Exception as e:
+        log.warning("user %s session dead: %s", uid, e)
+        try:
+            await STORE.upsert("sessions", "user_id", uid,
+                               {"user_id": uid, "session": None})
+        except Exception:
+            pass
+        return None
+
+
+async def use_account(uid):
+    """Is task ke liye user ka account set karo (nahi to owner ka)."""
+    c = await get_user_ub(uid)
+    _UB_CTX.set(c)          # None = owner ka userbot
+    return c
 
 
 async def get_set(uid):
@@ -1685,6 +1739,59 @@ async def send_by_file_id(client, dest_chat, msg, st=None):
     return None
 
 
+async def _direct_deliver(src, dest_chat, st=None):
+    """User ke apne account se file download -> BOT se seedha user ko bhejo.
+
+    Ye path tab chalta hai jab user ne /login kiya ho — us case me owner ka
+    cache channel use nahi ho sakta.
+    """
+    tmp = os.path.join("/tmp", f"dd_{src.id}_{int(time.time()*1000)}")
+    thp = None
+    try:
+        path = await _UB().download_media(src, file_name=tmp)
+        if not path:
+            return False
+        thp = await _grab_thumb(src)
+        cap = apply_caption(src.caption or "", st, _fname(src)) if st else (src.caption or None)
+        name = _fname(src) or f"file_{src.id}"
+        if src.video:
+            v = src.video
+            await CLIENT.send_video(dest_chat, path, caption=cap, thumb=thp,
+                                    duration=v.duration or 0, width=v.width or 0,
+                                    height=v.height or 0, supports_streaming=True,
+                                    file_name=name)
+        elif src.photo:
+            await CLIENT.send_photo(dest_chat, path, caption=cap)
+        elif src.audio:
+            a = src.audio
+            await CLIENT.send_audio(dest_chat, path, caption=cap, thumb=thp,
+                                    duration=a.duration or 0,
+                                    performer=a.performer, title=a.title,
+                                    file_name=name)
+        elif src.voice:
+            await CLIENT.send_voice(dest_chat, path, caption=cap)
+        elif src.animation:
+            await CLIENT.send_animation(dest_chat, path, caption=cap, thumb=thp)
+        elif src.video_note:
+            await CLIENT.send_video_note(dest_chat, path)
+        elif src.sticker:
+            await CLIENT.send_sticker(dest_chat, path)
+        else:
+            await CLIENT.send_document(dest_chat, path, caption=cap, thumb=thp,
+                                       file_name=name)
+        return True
+    except Exception as e:
+        log.warning("direct deliver fail msg=%s: %s", src.id, e)
+        return False
+    finally:
+        for f in (tmp, thp):
+            if f:
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
+
+
 async def fetch_one(chat, msg_id, dest_chat, stats, st=None):
     """Ek file: userbot -> cache -> user. FloodWait pe wait karke 1 retry —
     taaki Telegram ke temporary ban me bot ATKE nahi, khud resume ho."""
@@ -1710,9 +1817,12 @@ async def _fetch_one_try(chat, msg_id, dest_chat, stats, st=None):
                 return (False, "",
                         "aap is group/channel me member nahi ho "
                         "(ya chat private hai) — pehle join karo")
-            if not await ensure_peer(CACHE_CHANNEL):
+            # user ka apna account hai to owner ka cache channel use nahi
+            # kar sakte (wo us channel me nahi hai) -> direct delivery
+            _own = _UB() is USERBOT
+            if _own and not await ensure_peer(CACHE_CHANNEL):
                 return False, "", "cache channel access nahi (warm-up pending)"
-            src = await USERBOT.get_messages(chat, msg_id)
+            src = await _UB().get_messages(chat, msg_id)
             if not src or getattr(src, "empty", False) or src.id is None:
                 return False, "", "message nahi mila (deleted/private)"
             if not _has_media(src):
@@ -1722,6 +1832,17 @@ async def _fetch_one_try(chat, msg_id, dest_chat, stats, st=None):
                 log.info("no-media msg %s in %s -> %s", msg_id, chat, _why)
                 return False, clean_title(src), f"file nahi hai ({_why})"
             title = clean_title(src)
+
+            # ── LOGGED-IN USER PATH: user ke account se download,
+            #    bot se seedha upload (koi cache channel nahi) ──
+            if not _own:
+                ok = await _direct_deliver(src, dest_chat, st)
+                if UB_DELAY:
+                    await asyncio.sleep(UB_DELAY)
+                if ok:
+                    stats["ok"] += 1
+                    return True, title, ""
+                return False, title, "upload fail"
 
             try:
                 # src pehle hi fetch ho chuka hai -> src.copy() use karo.
@@ -1739,7 +1860,7 @@ async def _fetch_one_try(chat, msg_id, dest_chat, stats, st=None):
             if not cached_id:
                 return False, title, "cache copy fail"
 
-            cached_msg = await USERBOT.get_messages(CACHE_CHANNEL, cached_id)
+            cached_msg = await _UB().get_messages(CACHE_CHANNEL, cached_id)
             await send_throttle()          # flood-safe pacing (adaptive)
             delivered = None
             if cached_msg:
@@ -1789,7 +1910,7 @@ async def _fetch_one_try(chat, msg_id, dest_chat, stats, st=None):
 
 async def _del_cached(cid):
     try:
-        await USERBOT.delete_messages(CACHE_CHANNEL, [cid])
+        await _UB().delete_messages(CACHE_CHANNEL, [cid])
     except Exception:
         pass
 
@@ -1860,10 +1981,12 @@ async def handle_links(m: Message, pairs, _from_ask=False, _user=None, _total=No
                   f"🆔 <code>{chat}</code>\n\n"
                   f"❗ Main (<b>@{(USERBOT_ME.username if USERBOT_ME else 'userbot')}</b>) "
                   f"is group/channel ka <b>member nahi hoon</b>.\n\n"
-                  f"✅ <b>2 me se koi ek karo:</b>\n"
-                  f"1️⃣ Us group ka <b>invite link</b> yahan bhejo\n"
-                  f"    (<code>t.me/+xxxxx</code>) — main khud join kar lunga ⚡\n"
-                  f"2️⃣ Ya mujhe us group me <b>add</b> kar do\n\n"
+                  f"✅ <b>3 me se koi ek karo:</b>\n"
+                  f"1️⃣ 🔐 <b>/login</b> — apne account se login karo, phir "
+                  f"aapke saare groups se files milengi (sabse best!) ⚡\n"
+                  f"2️⃣ Us group ka <b>invite link</b> yahan bhejo "
+                  f"(<code>t.me/+xxxxx</code>)\n"
+                  f"3️⃣ Ya mujhe us group me <b>add</b> kar do\n\n"
                   f"📌 Uske baad post link dobara bhejo 🫧")
             if ack:
                 try:
@@ -2404,7 +2527,8 @@ CMD_BLOCK = ["start", "help", "id", "search", "plans", "buy", "myplan", "stats",
              "setcache", "link", "status",
              "forward", "cancel", "index", "reindex", "approve", "reject", "setplan",
              "removeplan", "user", "find", "reqs", "usage", "broadcast", "del", "ping",
-             "settings", "setting", "custom", "raw", "vj"]
+             "settings", "setting", "custom", "raw", "vj",
+             "login", "logout", "myaccount", "account"]
 
 # ─────────────────────────────── USER: start / help / id ────────────────────
 
@@ -2566,7 +2690,7 @@ async def set_cache_channel(m: Message, cid: int):
         return
     if USERBOT_OK:
         try:
-            await USERBOT.get_chat(cid)
+            await _UB().get_chat(cid)
         except Exception as e:
             ub_ok = False
             ub_err = str(e)[:160]
@@ -2613,13 +2737,19 @@ async def cmd_setdb(c, m: Message):
 
 @handler(filters.private & filters.text & ~filters.command(CMD_BLOCK, prefixes="/"))
 async def on_plain_text(c, m: Message):
+    # ★ login flow beech me hai to pehle wahi handle karo
+    if await login_step(c, m):
+        return
+    # ★ is user ka apna account (logged in ho to) use karo
+    await use_account(m.from_user.id)
+
     # ★ INVITE LINK -> userbot ko group me join karao (warna us group se
     # files nikal hi nahi sakte). t.me/+hash ya t.me/joinchat/hash
     _inv = re.search(r"(?:t\.me/\+|t\.me/joinchat/)([\w-]+)", m.text or "")
     if _inv and USERBOT_OK:
         _w = await m.reply_text("🔗 Invite link mila — join kar raha hoon… 🫧")
         try:
-            _ch = await USERBOT.join_chat(m.text.strip().split()[0])
+            _ch = await _UB().join_chat(m.text.strip().split()[0])
             PEER_OK.add(_ch.id)
             return await _w.edit_text(
                 f"✅ <b>JOIN HO GAYA!</b>\n📛 {_ch.title}\n\n"
@@ -2852,12 +2982,13 @@ async def cmd_raw(c, m: Message):
     if not pairs:
         return await m.reply_text("Use: <code>/raw &lt;post link&gt;</code>")
     chat, mid = pairs[0]
+    await use_account(m.from_user.id)
     await ensure_peer(chat)
     out = [f"<b>RAW DEBUG</b>\nchat=<code>{chat}</code> id=<code>{mid}</code>"]
 
     # 1) pyrogram parsed
     try:
-        msg = await USERBOT.get_messages(chat, mid)
+        msg = await _UB().get_messages(chat, mid)
         out.append(f"\n<b>pyrogram:</b> empty={getattr(msg,'empty',None)} "
                    f"media={getattr(msg,'media',None)} "
                    f"service={getattr(msg,'service',None)}")
@@ -2872,8 +3003,8 @@ async def cmd_raw(c, m: Message):
     try:
         from pyrogram.raw.functions.channels import GetMessages as RawGet
         from pyrogram.raw.types import InputMessageID
-        peer = await USERBOT.resolve_peer(chat)
-        r = await USERBOT.invoke(RawGet(channel=peer, id=[InputMessageID(id=mid)]))
+        peer = await _UB().resolve_peer(chat)
+        r = await _UB().invoke(RawGet(channel=peer, id=[InputMessageID(id=mid)]))
         for mm in getattr(r, "messages", [])[:1]:
             out.append(f"\n<b>RAW:</b> {type(mm).__name__}")
             md = getattr(mm, "media", None)
@@ -2905,6 +3036,7 @@ async def cmd_vj(c, m: Message):
             "Ye mode <b>kuch bhi filter nahi karta</b> — ek-ek message khud "
             "kholta hai aur jo file mile bhej deta hai 🫧")
 
+    await use_account(m.from_user.id)
     chat, start = pairs[0]
     to_id = None
     for tok in parts[1:]:
@@ -2987,6 +3119,160 @@ async def cmd_vj(c, m: Message):
 
 
 VJ_CANCEL = set()
+
+
+@handler(filters.command("login") & filters.private)
+async def cmd_login(c, m: Message):
+    uid = m.from_user.id
+    if await get_user_ub(uid):
+        return await m.reply_text(
+            "✅ <b>Aap pehle se LOGGED IN ho!</b>\n\n"
+            "Ab aap apne kisi bhi group/channel ka link bhej sakte ho ⚡\n"
+            "Nikalne ke liye: /logout")
+    LOGIN_WAIT[uid] = {"stage": "phone"}
+    await m.reply_text(
+        "🔐 <b>APNE ACCOUNT SE LOGIN KARO</b>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "Login karne ke baad bot <b>aapke</b> groups se files nikaal payega — "
+        "chahe main us group me na hoon 🫧\n\n"
+        "📱 <b>Apna phone number bhejo</b> (country code ke saath):\n"
+        "<code>+919876543210</code>\n\n"
+        "🔒 Aapki session sirf aapke liye use hoti hai.\n"
+        "❌ Cancel: /logout")
+
+
+@handler(filters.command("logout") & filters.private)
+async def cmd_logout(c, m: Message):
+    uid = m.from_user.id
+    LOGIN_WAIT.pop(uid, None)
+    cl = USER_CLIENTS.pop(uid, None)
+    if cl:
+        try:
+            await cl.stop()
+        except Exception:
+            pass
+    try:
+        await STORE.upsert("sessions", "user_id", uid,
+                           {"user_id": uid, "session": None})
+    except Exception:
+        pass
+    await m.reply_text("🔓 <b>Logout ho gaya.</b>\nDobara: /login")
+
+
+@handler(filters.command(["myaccount", "account"]) & filters.private)
+async def cmd_myaccount(c, m: Message):
+    cl = await get_user_ub(m.from_user.id)
+    if not cl:
+        return await m.reply_text(
+            "👤 <b>Koi account login nahi hai</b>\n\n"
+            "Abhi bot <b>owner ke account</b> se files nikalta hai — isliye "
+            "sirf un groups se mil sakti hain jisme owner hai.\n\n"
+            "🔐 Apne groups se nikalne ke liye: /login")
+    try:
+        me = await cl.get_me()
+        await m.reply_text(
+            f"👤 <b>LOGGED IN</b>\n━━━━━━━━━━━━━━\n"
+            f"📛 {me.first_name or ''}\n"
+            f"🆔 <code>{me.id}</code>\n"
+            f"🔗 @{me.username or '—'}\n\n"
+            f"✅ Aapke saare groups se files nikal sakti hain ⚡\n/logout")
+    except Exception as e:
+        await m.reply_text(f"⚠️ Session check fail: <code>{e}</code>\n/login dobara karo")
+
+
+async def login_step(c, m: Message) -> bool:
+    """Login ke beech me user ka jawab handle karo. True = handle ho gaya."""
+    uid = m.from_user.id
+    w = LOGIN_WAIT.get(uid)
+    if not w:
+        return False
+    txt = (m.text or "").strip()
+    stage = w.get("stage")
+
+    if stage == "phone":
+        ph = txt.replace(" ", "").replace("-", "")
+        if not ph.startswith("+") or not ph[1:].isdigit():
+            await m.reply_text("❌ Sahi format: <code>+919876543210</code>")
+            return True
+        wait = await m.reply_text("📡 Code bhej raha hoon…")
+        try:
+            cl = Client(f"login{uid}", api_id=API_ID, api_hash=API_HASH,
+                        in_memory=True)
+            await cl.connect()
+            sent = await cl.send_code(ph)
+        except Exception as e:
+            LOGIN_WAIT.pop(uid, None)
+            return bool(await wait.edit_text(f"❌ Code nahi bheja ja saka:\n<code>{e}</code>"))
+        w.update(stage="code", client=cl, phone=ph, hash=sent.phone_code_hash)
+        await wait.edit_text(
+            "📩 <b>CODE AAYA?</b>\n━━━━━━━━━━━━━━\n"
+            "Telegram pe jo 5 digit ka code aaya hai wo bhejo —\n"
+            "⚠️ <b>beech me space daal ke</b>, warna Telegram use cancel kar deta hai:\n"
+            "<code>1 2 3 4 5</code>\n\n❌ Cancel: /logout")
+        return True
+
+    if stage == "code":
+        code = txt.replace(" ", "").replace("-", "")
+        if not code.isdigit():
+            await m.reply_text("❌ Sirf digits bhejo — jaise <code>1 2 3 4 5</code>")
+            return True
+        cl = w["client"]
+        try:
+            await cl.sign_in(w["phone"], w["hash"], code)
+        except Exception as e:
+            en = type(e).__name__
+            if "SessionPasswordNeeded" in en:
+                w["stage"] = "2fa"
+                await m.reply_text("🔐 Account pe <b>2-step password</b> laga hai.\n"
+                                   "Apna password bhejo:")
+                return True
+            if "PhoneCodeInvalid" in en:
+                await m.reply_text("❌ Code galat hai — dobara bhejo (space ke saath)")
+                return True
+            if "PhoneCodeExpired" in en:
+                LOGIN_WAIT.pop(uid, None)
+                await m.reply_text("❌ Code expire ho gaya. /login dobara karo")
+                return True
+            LOGIN_WAIT.pop(uid, None)
+            await m.reply_text(f"❌ Login fail: <code>{e}</code>")
+            return True
+        await _login_done(cl, uid, m)
+        return True
+
+    if stage == "2fa":
+        cl = w["client"]
+        try:
+            await cl.check_password(txt)
+        except Exception as e:
+            await m.reply_text(f"❌ Password galat: <code>{type(e).__name__}</code>\n"
+                               f"Dobara bhejo ya /logout")
+            return True
+        await _login_done(cl, uid, m)
+        return True
+    return False
+
+
+async def _login_done(cl, uid, m: Message):
+    try:
+        ss = await cl.export_session_string()
+        me = await cl.get_me()
+        await STORE.upsert("sessions", "user_id", uid,
+                           {"user_id": uid, "session": ss})
+        USER_CLIENTS[uid] = cl
+    except Exception as e:
+        LOGIN_WAIT.pop(uid, None)
+        return await m.reply_text(f"❌ Session save fail: <code>{e}</code>")
+    LOGIN_WAIT.pop(uid, None)
+    try:
+        await m.delete()          # code/password wala message hata do
+    except Exception:
+        pass
+    await m.reply_text(
+        f"✅ <b>LOGIN SUCCESSFUL!</b>\n━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 {me.first_name or ''} (@{me.username or '—'})\n\n"
+        f"🎉 Ab <b>aapke</b> saare groups/channels se files nikal sakti hain — "
+        f"chahe bot owner un groups me na ho ⚡\n\n"
+        f"🔗 Bas post ka link bhejo!\n🔓 Nikalne ke liye: /logout")
 
 
 @handler(filters.command("setcache") & is_admin)
@@ -3650,6 +3936,7 @@ async def cb_vj(c, q: CallbackQuery):
 @handler(filters.regex(r"^ask:"), kind="callback")
 async def cb_ask(c, q: CallbackQuery):
     """'Kitni files chahiye?' ke buttons ka jawab."""
+    await use_account(q.from_user.id)
     chat_id = q.message.chat.id
     st = ASK_PENDING.get(chat_id)
     if not st or st["uid"] != q.from_user.id or time.time() - st["ts"] > ASK_TTL:
@@ -3956,7 +4243,7 @@ async def start_userbot():
                       app_version=f"{BOT_NAME} 1.0")
         if USERBOT is not None:
             try:
-                await USERBOT.stop()
+                await _UB().stop()
             except Exception:
                 pass
         sess_file = Path(SESSION_FILE)
@@ -3972,13 +4259,13 @@ async def start_userbot():
         else:
             log.warning("🔗 Link mode: userbot session nahi mila -> userbot_login.py chalao")
             return False
-        await USERBOT.start()
-        USERBOT_ME = await USERBOT.get_me()
+        await _UB().start()
+        USERBOT_ME = await _UB().get_me()
         USERBOT_OK = True
         log.info("👤 Userbot connected: %s (id=%s)", USERBOT_ME.first_name, USERBOT_ME.id)
         if CACHE_CHANNEL:
             try:
-                await USERBOT.get_chat(CACHE_CHANNEL)
+                await _UB().get_chat(CACHE_CHANNEL)
                 log.info("🗄️ Userbot cache channel OK: %s", CACHE_CHANNEL)
             except Exception as e:
                 log.warning("⚠️ Userbot cache channel access fail: %s", e)
@@ -4109,7 +4396,7 @@ async def shutdown_tasks():
         pass
     try:
         if USERBOT_OK and USERBOT is not None:
-            await USERBOT.stop()
+            await _UB().stop()
             log.info("👤 Userbot stopped")
     except Exception:
         pass
