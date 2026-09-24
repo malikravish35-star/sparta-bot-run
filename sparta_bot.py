@@ -2822,6 +2822,46 @@ async def cmd_link(c, m: Message):
         f"💡 Link post pe <b>right click → Copy Link</b> (ya share → copy)")
 
 
+@handler(filters.command("raw") & is_admin)
+async def cmd_raw(c, m: Message):
+    """/raw <link>  -> Telegram ne us message pe EXACTLY kya bheja, wo dikhao."""
+    pairs = parse_links(m.text or "")
+    if not pairs:
+        return await m.reply_text("Use: <code>/raw &lt;post link&gt;</code>")
+    chat, mid = pairs[0]
+    await ensure_peer(chat)
+    out = [f"<b>RAW DEBUG</b>\nchat=<code>{chat}</code> id=<code>{mid}</code>"]
+
+    # 1) pyrogram parsed
+    try:
+        msg = await USERBOT.get_messages(chat, mid)
+        out.append(f"\n<b>pyrogram:</b> empty={getattr(msg,'empty',None)} "
+                   f"media={getattr(msg,'media',None)} "
+                   f"service={getattr(msg,'service',None)}")
+        keys = [k for k in ("document","video","audio","photo","voice","animation",
+                            "video_note","sticker","text","caption")
+                if getattr(msg, k, None)]
+        out.append(f"fields: {keys or 'KUCH NAHI'}")
+    except Exception as e:
+        out.append(f"\npyrogram fail: <code>{e}</code>")
+
+    # 2) RAW MTProto — pyrogram parse na kar paye to bhi asli sach yahan
+    try:
+        from pyrogram.raw.functions.channels import GetMessages as RawGet
+        from pyrogram.raw.types import InputMessageID
+        peer = await USERBOT.resolve_peer(chat)
+        r = await USERBOT.invoke(RawGet(channel=peer, id=[InputMessageID(id=mid)]))
+        for mm in getattr(r, "messages", [])[:1]:
+            out.append(f"\n<b>RAW:</b> {type(mm).__name__}")
+            md = getattr(mm, "media", None)
+            out.append(f"raw media: <code>{type(md).__name__ if md else None}</code>")
+            if md is not None:
+                out.append(f"<code>{str(md)[:400]}</code>")
+    except Exception as e:
+        out.append(f"\nraw fail: <code>{e}</code>")
+    await m.reply_text("\n".join(out)[:4000])
+
+
 @handler(filters.command("setcache") & is_admin)
 async def cmd_setcache(c, m: Message):
     """CACHE_CHANNEL: us channel ka post forward karo, ya /setcache -100xxxx"""
