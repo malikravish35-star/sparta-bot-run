@@ -203,6 +203,7 @@ UB_TRANSMISSIONS = int(_get("UB_TRANSMISSIONS", 12))   # userbot ke parallel DC 
 SEQ_TIMEOUT    = int(_get("SEQ_TIMEOUT", 1800))        # sequence gate max wait (stuck-proof)
 PEER_SCAN_MAX  = int(_get("PEER_SCAN_MAX", 40))        # dialogs scan max seconds (hang-proof)
 SCAN_NO_HIST   = _get("SCAN_NO_HIST", "0") == "1"      # 1 = history method off
+TOPIC_SCAN_MAX = int(os.getenv("TOPIC_SCAN_MAX", "4000"))
 FLOOD_MAX_WAIT = int(_get("FLOOD_MAX_WAIT", 900))    # itne sec tak flood = wait + retry
 MAX_RANGE      = int(_get("MAX_RANGE", 500))             # t.me/x/10-510 range cap
 LINK_MODE      = _get("LINK_MODE", "1") == "1"
@@ -931,6 +932,9 @@ LINK_RE = re.compile(
 BARE_RE = re.compile(r"(?<!\d)(-100\d{6,})(?:[\s/:]+)(\d{1,9})(?![\d])")
 
 
+TOPIC_OF = {}     # (chat, msg_id) -> topic_id   (forum topic links ke liye)
+
+
 def parse_links(text):
     """Text se saare (chat, msg_id) pairs nikalo. Duplicates hata deta hai.
 
@@ -974,6 +978,8 @@ def parse_links(text):
             ids = list(nums)                          # single message
         elif len(nums) == 2 and not qsingle and not dash:
             ids = [nums[1]]                           # ★ TOPIC: /<topic>/<msg>
+            # topic id yaad rakho -> scan sirf isi topic ke andar hoga
+            TOPIC_OF[(chat, nums[1])] = nums[0]
         else:
             a2, b2 = sorted(nums[-2:])                # range (last 2 numbers)
             ids = list(range(a2, min(b2, a2 + MAX_RANGE - 1) + 1))
@@ -1148,13 +1154,68 @@ def kb_ask(mx):
     return InlineKeyboardMarkup(rows)
 
 
-async def scan_forward(chat, start_id, need, cap=5000, on_progress=None):
+async def scan_topic(chat, topic_id, start_id, need, on_progress=None):
+    """Forum TOPIC ke andar hi media dhoondo (id-range scan ki jagah).
+
+    Topic ke messages chat me bikhre hote hain — beech me doosre topics ke
+    messages aate hain. Isliye id+1, id+2... scan karna galat hai.
+    `get_discussion_replies` (RPC messages.GetReplies) sirf usi topic ke
+    messages deta hai, aur ye flood-limited bhi nahi hai.
+    """
+    got, seen_n = [], 0
+    try:
+        async for mm in USERBOT.get_discussion_replies(chat, topic_id):
+            seen_n += 1
+            if mm and not getattr(mm, "empty", False) and _has_media(mm):
+                got.append(mm.id)
+            if seen_n % 200 == 0:
+                if on_progress:
+                    try:
+                        await on_progress(0, mm.id if mm else start_id)
+                    except Exception:
+                        pass
+                await asyncio.sleep(0)
+            if seen_n >= TOPIC_SCAN_MAX:
+                break
+    except FloodWait as fe:
+        w = int(getattr(fe, "value", 30) or 30)
+        log.warning("⏳ topic scan FloodWait %ss", w)
+        if w <= 60:
+            await asyncio.sleep(w + 2)
+            return await scan_topic(chat, topic_id, start_id, need, on_progress)
+        return None
+    except Exception as e:
+        log.warning("topic scan fail (topic=%s): %s", topic_id, e)
+        return None
+
+    got = sorted(set(got))
+    log.info("scan_topic: topic=%s me %s media mile (scanned=%s)",
+             topic_id, len(got), seen_n)
+    if not got:
+        return None
+    fwd = [i for i in got if i >= start_id]
+    if not fwd:
+        # link topic ke aakhir me tha -> poore topic ki files de do
+        log.info("scan_topic: %s ke aage kuch nahi, poora topic use kar rahe", start_id)
+        fwd = got
+    return [(chat, i) for i in fwd[:need]]
+
+
+async def scan_forward(chat, start_id, need, cap=5000, on_progress=None,
+                       topic=None):
     """Ek message id se SHURU karke neeche ki files collect karo.
 
     Topic/channel me files lagatar hoti hain — user sirf pehla link deta hai,
     bot aage badh kar `need` files nikal leta hai (100-100 batch me, fast).
     Video/PDF/photo — sab media count hota hai; text messages skip.
     """
+    # ★ Agar topic link hai to pehle topic-scan (sahi + fast + flood-free)
+    if topic:
+        tp = await scan_topic(chat, topic, start_id, need, on_progress)
+        if tp:
+            return tp
+        log.info("topic scan se kuch nahi — id-range scan pe fallback")
+
     out = []
     cid = start_id
     end = start_id + cap
@@ -1644,7 +1705,8 @@ async def handle_links(m: Message, pairs, _from_ask=False, _user=None, _total=No
                     pass
             return await m.reply_text(_t)
         ASK_PENDING[chat_id] = {"uid": uid, "mode": "fwd", "chat": chat,
-                                "start": start, "ts": time.time()}
+                                "start": start, "ts": time.time(),
+                                "topic": TOPIC_OF.get((chat, start))}
         busy_del(chat_id)
         _q = (
             f"🫧 ✨┄┄┄┄┄┄┄┄┄┄┄✨\n"
@@ -2421,7 +2483,8 @@ async def on_plain_text(c, m: Message):
                     if n == 1:
                         # exact message me file na ho (topic header / text) to
                         # usi jagah se neeche pehli file utha lo
-                        sel = await scan_forward(st["chat"], st["start"], 1)
+                        sel = await scan_forward(st["chat"], st["start"], 1,
+                                                 topic=st.get("topic"))
                         if not sel:
                             sel = [(st["chat"], st["start"])]
                     else:
@@ -2441,6 +2504,7 @@ async def on_plain_text(c, m: Message):
                                 pass
 
                         sel = await scan_forward(st["chat"], st["start"], n,
+                                                 topic=st.get("topic"),
                                                  on_progress=_pf)
                         try:
                             await probe.delete()
@@ -3269,7 +3333,8 @@ async def cb_ask(c, q: CallbackQuery):
         u2 = await get_user(q.from_user, chat_id)
         n = max(1, min(n, user_limit(u2)))
         if n == 1:
-            sel = await scan_forward(st["chat"], st["start"], 1)
+            sel = await scan_forward(st["chat"], st["start"], 1,
+                                                 topic=st.get("topic"))
             if not sel:
                 sel = [(st["chat"], st["start"])]
         else:
@@ -3292,7 +3357,8 @@ async def cb_ask(c, q: CallbackQuery):
                 except Exception:
                     pass
 
-            sel = await scan_forward(st["chat"], st["start"], n, on_progress=_pf2)
+            sel = await scan_forward(st["chat"], st["start"], n,
+                                                 topic=st.get("topic"), on_progress=_pf2)
             if not sel:
                 return await q.message.reply_text(
                     "⚠️ Is link ke neeche <b>koi file nahi mili</b>.")
