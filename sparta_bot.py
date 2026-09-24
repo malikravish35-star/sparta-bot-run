@@ -3687,7 +3687,24 @@ async def main():
         log.warning("CONFIG :: %s", p)
     start_health_server()            # uptime/keep-alive ke liye (PORT pe 200 OK)
     CLIENT = build_client()          # running loop ke andar banao (zaroori!)
-    await CLIENT.start()
+    # ── FLOOD-SAFE BOT LOGIN ──
+    # Bar-bar restart hone pe Telegram sign_in pe FloodWait deta hai. Crash hoke
+    # turant restart = flood aur badhta hai. Isliye yahin wait karke retry karo.
+    for _try in range(12):
+        try:
+            await CLIENT.start()
+            break
+        except FloodWait as _fw:
+            _w = int(getattr(_fw, "value", 60) or 60)
+            log.warning("⏳ Bot login FloodWait %ss — wait karke retry (%d/12) "
+                        "[restart mat karo, khud resume hoga]", _w, _try + 1)
+            await asyncio.sleep(_w + 5)
+        except Exception as _e:
+            log.error("❌ Bot login fail: %s — 20s me retry", _e)
+            await asyncio.sleep(20)
+    else:
+        log.error("❌ Bot login baar-baar fail — process exit")
+        raise SystemExit(1)
     me = await CLIENT.get_me()
     log.info("🤖 Logged in as @%s (id=%s)", me.username, me.id)
     register_handlers()
