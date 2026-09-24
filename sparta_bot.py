@@ -1328,9 +1328,30 @@ async def scan_forward(chat, start_id, need, cap=5000, on_progress=None,
     return out[:need]
 
 
+# ye "media" nahi hain — inhe file nahi maana jayega
+_SKIP_MEDIA = {"WEB_PAGE", "POLL", "CONTACT", "LOCATION", "VENUE",
+               "DICE", "GAME", "STORY", "GIVEAWAY", "GIVEAWAY_WINNERS"}
+
+
+def _media_kind(mm):
+    """Message me kis type ka media hai -> naam (ya '' agar koi nahi)."""
+    if not mm:
+        return ""
+    for attr in ("document", "video", "audio", "photo", "voice",
+                 "animation", "video_note", "sticker"):
+        if getattr(mm, attr, None):
+            return attr
+    # koi naya/unknown media type bhi pakdo (pyrogram ka media enum)
+    md = getattr(mm, "media", None)
+    if md:
+        nm = (getattr(md, "name", None) or str(md).split(".")[-1] or "").upper()
+        if nm and nm not in _SKIP_MEDIA:
+            return nm.lower()
+    return ""
+
+
 def _has_media(mm):
-    return bool(mm and (mm.document or mm.video or mm.audio or mm.photo
-                        or mm.voice or mm.animation or mm.video_note))
+    return bool(_media_kind(mm))
 
 
 async def scan_media(pairs):
@@ -1672,7 +1693,11 @@ async def _fetch_one_try(chat, msg_id, dest_chat, stats, st=None):
             if not src or getattr(src, "empty", False) or src.id is None:
                 return False, "", "message nahi mila (deleted/private)"
             if not _has_media(src):
-                return False, clean_title(src), "is message me file nahi hai"
+                _md = getattr(src, "media", None)
+                _why = (getattr(_md, "name", None) or str(_md)) if _md else (
+                    "sirf text" if (src.text or src.caption) else "khali/service msg")
+                log.info("no-media msg %s in %s -> %s", msg_id, chat, _why)
+                return False, clean_title(src), f"file nahi hai ({_why})"
             title = clean_title(src)
 
             try:
