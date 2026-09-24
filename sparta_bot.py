@@ -61,6 +61,7 @@
 """
 
 import asyncio
+import contextlib
 import functools
 import html
 import threading
@@ -197,10 +198,10 @@ SESSION_STRING = _get("SESSION_STRING", "")              # pyrogram v2 string se
 SESSION_FILE   = _get("SESSION_FILE", "userbot.session")
 CLEAN_CACHE    = _get("CLEAN_CACHE", "1") == "1"         # cache se file delete kare?
 CACHE_TTL      = int(_get("CACHE_TTL", 300))             # sec
-UB_CONCURRENCY = int(_get("USERBOT_CONCURRENCY", 8))   # speed: 4 -> 8 parallel files
+UB_CONCURRENCY = int(_get("USERBOT_CONCURRENCY", 14))   # speed: 4 -> 8 parallel files
 UB_DELAY       = float(_get("USERBOT_DELAY", 0.0))     # per-file extra sleep hataya
-BOT_SEND_GAP   = float(_get("BOT_SEND_GAP", 0.12))     # global throttle (adaptive, flood-safe)
-UB_TRANSMISSIONS = int(_get("UB_TRANSMISSIONS", 12))   # userbot ke parallel DC streams
+BOT_SEND_GAP   = float(_get("BOT_SEND_GAP", 0.04))     # global throttle (adaptive, flood-safe)
+UB_TRANSMISSIONS = int(_get("UB_TRANSMISSIONS", 24))   # userbot ke parallel DC streams
 SEQ_TIMEOUT    = int(_get("SEQ_TIMEOUT", 1800))        # sequence gate max wait (stuck-proof)
 PEER_SCAN_MAX  = int(_get("PEER_SCAN_MAX", 90))        # dialogs scan max seconds (hang-proof)
 SCAN_NO_HIST   = _get("SCAN_NO_HIST", "0") == "1"      # 1 = history method off
@@ -575,8 +576,8 @@ SESSION_DEAD = False      # env/DB session mar chuki -> retry band
 _ALERT_SENT = {}
 USERBOT_ME = None
 SEM_UB = asyncio.Semaphore(UB_CONCURRENCY)
-BIG_MB = int(_get("BIG_MB", 150))                   # isse bari = "big file"
-SEM_BIG = asyncio.Semaphore(int(_get("BIG_CONCURRENCY", 2)))  # bari files 2-at-a-time
+BIG_MB = int(_get("BIG_MB", 250))                   # isse bari = "big file"
+SEM_BIG = asyncio.Semaphore(int(_get("BIG_CONCURRENCY", 3)))  # bari files 2-at-a-time
 
 
 # ── ADAPTIVE SEND THROTTLE ────────────────────────────────────────────────
@@ -1486,8 +1487,10 @@ async def _reupload_via_download(src, msg_id):
         DL_PROG[dlkey] = [cur, tot or size, t0]
 
     dl_timeout = 600 + (size // 1048576) * 2      # bari file = zyada waqt
-    sem = SEM_BIG if size > BIG_MB * 1048576 else SEM_UB
-    async with sem:                              # bari file = poori bandwidth
+    # NOTE: caller (_fetch_one_try) SEM_UB pehle hi hold kiye hue hai.
+    # Dobara lena = self-deadlock. Sirf bari files pe extra gate.
+    _big = size > BIG_MB * 1048576
+    async with (SEM_BIG if _big else contextlib.AsyncExitStack()):                              # bari file = poori bandwidth
         try:
             # ★ STALL WATCHDOG: agar download STALL_SEC tak 1 byte bhi aage
             # na badhe to connection mar chuka hai -> abort karke retry.
@@ -1762,12 +1765,17 @@ async def _direct_deliver(src, dest_chat, st=None):
     cache channel use nahi ho sakta.
     """
     tmp = os.path.join("/tmp", f"dd_{src.id}_{int(time.time()*1000)}")
-    thp = None
+    thp, _own_thumb = None, True
     try:
         path = await _UB().download_media(src, file_name=tmp)
         if not path:
             return False
-        thp = await _grab_thumb(src)
+        # user ki apni thumbnail > original thumbnail
+        _ct = (st or {}).get("thumb")
+        if _ct and os.path.exists(_ct):
+            thp, _own_thumb = _ct, False        # custom = delete mat karna
+        else:
+            thp, _own_thumb = await _grab_thumb(src), True
         cap = apply_caption(src.caption or "", st, _fname(src)) if st else (src.caption or None)
         name = _fname(src) or f"file_{src.id}"
         if src.video:
@@ -1800,7 +1808,8 @@ async def _direct_deliver(src, dest_chat, st=None):
         log.warning("direct deliver fail msg=%s: %s", src.id, e)
         return False
     finally:
-        for f in (tmp, thp):
+        _rm = [tmp] + ([thp] if (thp and _own_thumb) else [])
+        for f in _rm:
             if f:
                 try:
                     os.remove(f)
@@ -1849,9 +1858,15 @@ async def _fetch_one_try(chat, msg_id, dest_chat, stats, st=None):
                 return False, clean_title(src), f"file nahi hai ({_why})"
             title = clean_title(src)
 
-            # ── LOGGED-IN USER PATH: user ke account se download,
-            #    bot se seedha upload (koi cache channel nahi) ──
-            if not _own:
+            # ── CUSTOM THUMBNAIL: file_id/copy se bhejne par Telegram
+            #    thumb ko IGNORE kar deta hai. Isliye jab user ne apni
+            #    thumbnail set ki ho to file dobara upload karni padti hai.
+            _cthumb = (st or {}).get("thumb")
+            if _cthumb and not os.path.exists(_cthumb):
+                _cthumb = None
+
+            # ── LOGGED-IN USER PATH / CUSTOM THUMB PATH ──
+            if (not _own) or _cthumb:
                 ok = await _direct_deliver(src, dest_chat, st)
                 if UB_DELAY:
                     await asyncio.sleep(UB_DELAY)
@@ -2434,8 +2449,8 @@ def build_client() -> Client:
         bot_token=BOT_TOKEN,
         api_id=API_ID,
         api_hash=API_HASH,
-        workers=64,
-        max_concurrent_transmissions=16,
+        workers=96,
+        max_concurrent_transmissions=32,
         sleep_threshold=25,
         in_memory=True,
     )
@@ -4262,7 +4277,7 @@ async def start_userbot():
         log.warning("🔗 Link mode: userbot session nahi mila -> userbot_login.py chalao")
         return False
     try:
-        kwargs = dict(api_id=API_ID, api_hash=API_HASH, workers=32,
+        kwargs = dict(api_id=API_ID, api_hash=API_HASH, workers=64,
                       max_concurrent_transmissions=UB_TRANSMISSIONS,
                       sleep_threshold=25,
                       # Telegram me session ka naam clean dikhe (default "CPython 3.x" hota hai)
