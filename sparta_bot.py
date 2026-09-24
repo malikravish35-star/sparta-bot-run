@@ -216,6 +216,7 @@ DEVICE_NAME    = _get("DEVICE_NAME", "Sparta SRC Server")   # Telegram Devices m
 HEALTH_PORT    = int(_get("PORT", _get("HEALTH_PORT", 8080)))
 SELF_PING_URL  = _get("SELF_PING_URL", "")          # apna hi public URL (optional)
 SELF_PING_EVERY= int(_get("SELF_PING_EVERY", 300))  # sec (5 min)
+STALL_SEC      = int(_get("STALL_SEC", 150))        # download itne sec ruka = abort+retry
 ASK_COUNT    = _get("ASK_COUNT", "1") != "0"   # link ke baad "kitni files?" poocho
 ASK_TTL      = int(_get("ASK_TTL", 600))       # sec — answer ka wait
 MAX_FILE_MB  = int(_get("MAX_FILE_MB", 500))   # isse badi file skip (memory safe)
@@ -1425,9 +1426,33 @@ async def _reupload_via_download(src, msg_id):
     sem = SEM_BIG if size > BIG_MB * 1048576 else SEM_UB
     async with sem:                              # bari file = poori bandwidth
         try:
-            path = await asyncio.wait_for(
-                USERBOT.download_media(src, file_name=tmp, progress=_dl_cb),
-                timeout=dl_timeout)
+            # ★ STALL WATCHDOG: agar download STALL_SEC tak 1 byte bhi aage
+            # na badhe to connection mar chuka hai -> abort karke retry.
+            # (pehle ye poore dl_timeout tak latka rehta tha = "file beech
+            #  me ruk gayi")
+            dl_task = asyncio.ensure_future(
+                USERBOT.download_media(src, file_name=tmp, progress=_dl_cb))
+
+            async def _stall_guard():
+                last, last_t = -1, time.time()
+                while not dl_task.done():
+                    await asyncio.sleep(10)
+                    rec = DL_PROG.get(dlkey) or [0, 0, 0]
+                    if rec[0] != last:
+                        last, last_t = rec[0], time.time()
+                    elif time.time() - last_t > STALL_SEC:
+                        log.warning("🧊 download STALL (%ss koi progress nahi) "
+                                    "msg %s — abort", STALL_SEC, msg_id)
+                        dl_task.cancel()
+                        return
+
+            guard = asyncio.ensure_future(_stall_guard())
+            try:
+                path = await asyncio.wait_for(dl_task, timeout=dl_timeout)
+            except asyncio.CancelledError:
+                raise TimeoutError("download stall — dobara koshish")
+            finally:
+                guard.cancel()
             if not path:
                 return None
             log.info("⬆️ download complete, upload to cache: msg %s", msg_id)
