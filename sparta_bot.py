@@ -1795,9 +1795,19 @@ async def _direct_deliver(src, dest_chat, st=None):
     async with SEM_REUP:          # ek waqt me sirf 2 bhaari upload
         tmp = os.path.join("/tmp", f"dd_{src.id}_{int(time.time()*1000)}")
         thp, own_thumb, path = None, True, None
+        pkey = (getattr(src.chat, "id", 0), src.id)
         try:
+            psize = _media_size(src) or 1
+            DL_PROG[pkey] = [0, psize, time.time(), "dl"]
+
+            def _dcb(cur, tot, *a):
+                rec = DL_PROG.get(pkey)
+                DL_PROG[pkey] = [cur, tot or psize,
+                                 rec[2] if rec else time.time(), "dl"]
+
             path = await asyncio.wait_for(
-                _UB().download_media(src, file_name=tmp), timeout=DL_TIMEOUT)
+                _UB().download_media(src, file_name=tmp, progress=_dcb),
+                timeout=DL_TIMEOUT)
             if not path:
                 return False
             _ct = (st or {}).get("thumb")
@@ -1809,6 +1819,13 @@ async def _direct_deliver(src, dest_chat, st=None):
                    if st else (src.caption or None))
             name = _fname(src) or f"file_{src.id}"
 
+            DL_PROG[pkey] = [0, psize, time.time(), "up"]
+
+            def _ucb(cur, tot, *a):
+                rec = DL_PROG.get(pkey)
+                DL_PROG[pkey] = [cur, tot or psize,
+                                 rec[2] if rec else time.time(), "up"]
+
             async def _up():
                 if src.video:
                     v = src.video
@@ -1816,26 +1833,29 @@ async def _direct_deliver(src, dest_chat, st=None):
                         dest_chat, path, caption=cap, thumb=thp,
                         duration=v.duration or 0, width=v.width or 0,
                         height=v.height or 0, supports_streaming=True,
-                        file_name=name)
+                        file_name=name, progress=_ucb)
                 if src.photo:
-                    return await CLIENT.send_photo(dest_chat, path, caption=cap)
+                    return await CLIENT.send_photo(dest_chat, path, caption=cap,
+                                                   progress=_ucb)
                 if src.audio:
                     a = src.audio
                     return await CLIENT.send_audio(
                         dest_chat, path, caption=cap, thumb=thp,
                         duration=a.duration or 0, performer=a.performer,
-                        title=a.title, file_name=name)
+                        title=a.title, file_name=name, progress=_ucb)
                 if src.voice:
-                    return await CLIENT.send_voice(dest_chat, path, caption=cap)
+                    return await CLIENT.send_voice(dest_chat, path, caption=cap,
+                                                   progress=_ucb)
                 if src.animation:
-                    return await CLIENT.send_animation(dest_chat, path,
-                                                       caption=cap, thumb=thp)
+                    return await CLIENT.send_animation(dest_chat, path, caption=cap,
+                                                       thumb=thp, progress=_ucb)
                 if src.video_note:
                     return await CLIENT.send_video_note(dest_chat, path)
                 if src.sticker:
                     return await CLIENT.send_sticker(dest_chat, path)
                 return await CLIENT.send_document(dest_chat, path, caption=cap,
-                                                  thumb=thp, file_name=name)
+                                                  thumb=thp, file_name=name,
+                                                  progress=_ucb)
 
             # upload flaky ho sakta hai (timeout/broken pipe) -> 3 koshish
             for att in range(3):
@@ -1859,6 +1879,10 @@ async def _direct_deliver(src, dest_chat, st=None):
             log.warning("direct deliver fail msg=%s: %s", src.id, e)
             return False
         finally:
+            try:
+                DL_PROG.pop(pkey, None)
+            except Exception:
+                pass
             for f in ([tmp, path] + ([thp] if (thp and own_thumb) else [])):
                 if f:
                     try:
@@ -2158,7 +2182,9 @@ async def handle_links(m: Message, pairs, _from_ask=False, _user=None, _total=No
             items = [v for v in DL_PROG.values() if v and v[1] and len(v) > 2]
             if not items:
                 continue
-            cur, tot, t0dl = max(items, key=lambda v: v[0] / max(1, v[1]))
+            _top = max(items, key=lambda v: v[0] / max(1, v[1]))
+            cur, tot, t0dl = _top[0], _top[1], _top[2]
+            phase = _top[3] if len(_top) > 3 else "dl"
             pct = min(99, int(cur * 100 / max(1, tot)))
             el = max(1.0, time.time() - t0dl)
             speed = cur / el
@@ -2166,9 +2192,11 @@ async def handle_links(m: Message, pairs, _from_ask=False, _user=None, _total=No
             try:
                 await status.edit_text(
                     f"🫧 ✨┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄✨\n"
-                    f"{spin()} <b>BARI FILE DOWNLOAD HO RAHI HAI…</b>\n"
+                    f"{spin()} <b>" + ("FILE UPLOAD HO RAHI HAI…" if phase == "up"
+                                       else "FILE DOWNLOAD HO RAHI HAI…") + "</b>\n"
                     f"<code>[{pbar(cur, tot)}]</code> {pct}%\n\n"
-                    f"⬇️ <b>{cur // 1048576} / {tot // 1048576} MB</b>\n"
+                    + ("⬆️" if phase == "up" else "⬇️")
+                    + f" <b>{cur // 1048576} / {tot // 1048576} MB</b>\n"
                     f"⚡ {speed / 1048576:.1f} MB/s • "
                     + (f"⏳ ETA ~{int(eta // 60)}m {int(eta % 60):02d}s\n" if eta else "⏳ bas thoda sa…\n")
                     + f"📥 <b>{stats['ok']}/{len(allowed)}</b> aayi • 💔 {stats['fail']} fail\n"
