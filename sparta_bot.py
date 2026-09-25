@@ -2213,7 +2213,9 @@ async def handle_links(m: Message, pairs, _from_ask=False, _user=None, _total=No
         except asyncio.TimeoutError:
             log.warning("⏭️ sequence gate timeout idx=%s — aage badha", idx)
         try:
-            return await fetch_one(chat, mid, chat_id, stats, st)
+            _r = await fetch_one(chat, mid, chat_id, stats, st)
+            log.info("📤 SENT slot=%s mid=%s ok=%s", idx, mid, _r[0])
+            return _r
         finally:
             if idx + 1 < len(_gates):
                 _gates[idx + 1].set()
@@ -2222,8 +2224,13 @@ async def handle_links(m: Message, pairs, _from_ask=False, _user=None, _total=No
     # Files parallel fetch hoti hain (speed), par user ko ORDER me jaati hain.
     # Har worker apni baari ka intezaar karta hai: slot i ka gate tabhi khulta
     # hai jab slot i-1 deliver ho chuka ho. Speed barkarar — sirf send ordered.
-    _gates = ([asyncio.Event() for _ in allowed] if st.get("sequence", True)
-              else None)
+    _seq_on = st.get("sequence", True)
+    if _seq_on is None:
+        _seq_on = True
+    _gates = [asyncio.Event() for _ in allowed] if _seq_on else None
+    log.info("📑 SEQUENCE %s | files=%d | order=%s",
+             "ON" if _seq_on else "OFF", len(allowed),
+             [i for _c, i in allowed][:12])
     if _gates:
         _gates[0].set()
 
