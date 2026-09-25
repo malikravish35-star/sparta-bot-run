@@ -1116,17 +1116,17 @@ def no_file_msg():
 
 
 async def ub_ready():
-    # user ne khud /login kiya hai -> uske liye sab ready hai
-    # (us case me cache channel ki bhi zaroorat nahi, direct delivery hoti hai)
+    # har user apne account se /login karta hai -> uske liye sab ready
     if _UB_CTX.get() is not None:
         return True
+    # global fallback sirf tab jab admin ne /setmain kiya ho
     return bool(USERBOT_OK and USERBOT and CACHE_CHANNEL)
 
 
 async def link_error_msg():
     if _UB_CTX.get() is not None:
         return ""
-    if not USERBOT_OK:
+    if True:
         return (
             "🔐 <b>PEHLE LOGIN KARO</b>\n"
             "━━━━━━━━━━━━━━━━━━━\n"
@@ -2580,7 +2580,7 @@ CMD_BLOCK = ["start", "help", "id", "search", "plans", "buy", "myplan", "stats",
              "setcache", "link", "status",
              "forward", "cancel", "index", "reindex", "approve", "reject", "setplan",
              "removeplan", "user", "find", "reqs", "usage", "broadcast", "del", "ping",
-             "settings", "setting", "custom", "raw", "vj", "logoutall",
+             "settings", "setting", "custom", "raw", "vj", "logoutall", "setmain",
              "login", "logout", "myaccount", "account"]
 
 # ─────────────────────────────── USER: start / help / id ────────────────────
@@ -3219,6 +3219,26 @@ async def cmd_logout(c, m: Message):
     await m.reply_text("🔓 <b>Logout ho gaya.</b>\nDobara: /login")
 
 
+@handler(filters.command("setmain") & is_admin)
+async def cmd_setmain(c, m: Message):
+    """(Optional) Apne logged-in account ko global fallback banao."""
+    global USERBOT, USERBOT_OK, USERBOT_ME, SESSION_DEAD
+    uid = m.from_user.id
+    cl = await get_user_ub(uid)
+    if not cl:
+        return await m.reply_text("Pehle /login karo, phir /setmain")
+    doc = await STORE.find_one("sessions", "user_id", uid) or {}
+    USERBOT, USERBOT_OK, SESSION_DEAD = cl, True, False
+    USERBOT_ME = await cl.get_me()
+    await STORE.upsert("sessions", "user_id", 0,
+                       {"user_id": 0, "session": doc.get("session")})
+    asyncio.create_task(warm_peer_cache())
+    await m.reply_text(
+        "👑 <b>Ab ye account GLOBAL fallback hai.</b>\n"
+        "Jin users ne /login nahi kiya, wo iske through kaam karenge.\n"
+        "❌ Hatane ke liye: /logoutall")
+
+
 @handler(filters.command("logoutall") & is_admin)
 async def cmd_logoutall(c, m: Message):
     """Main userbot ko bhi hata do (sirf admin)."""
@@ -3346,24 +3366,9 @@ async def _login_done(cl, uid, m: Message):
         LOGIN_WAIT.pop(uid, None)
         return await m.reply_text(f"❌ Session save fail: <code>{e}</code>")
     LOGIN_WAIT.pop(uid, None)
-    # ★ ADMIN login kare to wahi account GLOBAL fallback userbot ban jaye —
-    #   (jin users ne /login nahi kiya unke liye). Session string env me
-    #   badalne ki zaroorat nahi.
-    _is_owner = uid in ADMINS
-    if _is_owner:
-        global USERBOT, USERBOT_OK, USERBOT_ME, SESSION_DEAD
-        try:
-            SESSION_DEAD = False
-            _ALERT_SENT.pop("ub", None)
-            USERBOT = cl
-            USERBOT_OK = True
-            USERBOT_ME = me
-            await STORE.upsert("sessions", "user_id", 0,
-                               {"user_id": 0, "session": ss})
-            asyncio.create_task(warm_peer_cache())
-            log.info("👑 admin login -> global userbot set: %s", me.id)
-        except Exception as e:
-            log.warning("global userbot set fail: %s", e)
+    # NOTE: admin ka login ab GLOBAL userbot NAHI banta — har user apne
+    # account se /login karega. Admin chahe to /setmain se global bana sakta
+    # hai (optional fallback), warna kisi ka account share nahi hota.
     try:
         await m.delete()          # code/password wala message hata do
     except Exception:
@@ -3373,7 +3378,9 @@ async def _login_done(cl, uid, m: Message):
         f"👤 {me.first_name or ''} (@{me.username or '—'})\n\n"
         f"🎉 Ab <b>aapke</b> saare groups/channels se files nikal sakti hain — "
         f"chahe bot owner un groups me na ho ⚡\n\n"
-        f"🔗 Bas post ka link bhejo!\n🔓 Nikalne ke liye: /logout")
+        f"🔗 Bas post ka link bhejo!\n🔓 Nikalne ke liye: /logout\n\n"
+        f"🔒 Aapka account sirf aapke liye use hota hai — kisi aur user ke "
+        f"kaam me nahi aata 🫧")
 
 
 @handler(filters.command("setcache") & is_admin)
@@ -4400,13 +4407,12 @@ async def start_userbot():
             try:
                 await CLIENT.send_message(
                     ADMIN_ID,
-                    "🔐 <b>OWNER SESSION EXPIRE HO GAYI</b>\n"
+                    "ℹ️ <b>Global fallback session nahi hai</b>\n"
                     "━━━━━━━━━━━━━━━━━━━\n"
-                    "Telegram ne purana login kaat diya hai.\n\n"
-                    "👉 Bas <b>/login</b> bhejo — naya account jud jayega aur "
-                    "wahi global userbot ban jayega ⚡\n\n"
-                    "ℹ️ Jin users ne khud <b>/login</b> kiya hai unka kaam "
-                    "abhi bhi chal raha hai 🫧")
+                    "Koi baat nahi — har user apne account se <b>/login</b> "
+                    "karke bot use kar sakta hai ⚡\n\n"
+                    "Chaho to apna account fallback bana sakte ho: "
+                    "<code>/login</code> phir <code>/setmain</code>")
             except Exception:
                 pass
         return False
