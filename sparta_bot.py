@@ -201,7 +201,7 @@ CACHE_TTL      = int(_get("CACHE_TTL", 300))             # sec
 UB_CONCURRENCY = int(_get("USERBOT_CONCURRENCY", 14))   # speed: 4 -> 8 parallel files
 UB_DELAY       = float(_get("USERBOT_DELAY", 0.0))     # per-file extra sleep hataya
 BOT_SEND_GAP   = float(_get("BOT_SEND_GAP", 0.04))     # global throttle (adaptive, flood-safe)
-UB_TRANSMISSIONS = int(_get("UB_TRANSMISSIONS", 24))   # userbot ke parallel DC streams
+UB_TRANSMISSIONS = int(_get("UB_TRANSMISSIONS", 14))   # userbot ke parallel DC streams
 SEQ_TIMEOUT    = int(_get("SEQ_TIMEOUT", 1800))        # sequence gate max wait (stuck-proof)
 PEER_SCAN_MAX  = int(_get("PEER_SCAN_MAX", 90))        # dialogs scan max seconds (hang-proof)
 SCAN_NO_HIST   = _get("SCAN_NO_HIST", "0") == "1"      # 1 = history method off
@@ -577,7 +577,12 @@ _ALERT_SENT = {}
 USERBOT_ME = None
 SEM_UB = asyncio.Semaphore(UB_CONCURRENCY)
 BIG_MB = int(_get("BIG_MB", 250))                   # isse bari = "big file"
-SEM_BIG = asyncio.Semaphore(int(_get("BIG_CONCURRENCY", 3)))  # bari files 2-at-a-time
+SEM_BIG = asyncio.Semaphore(int(_get("BIG_CONCURRENCY", 3)))
+# download+re-upload bahut bhaari hai (custom thumb / logged-in user path).
+# Isse zyada parallel karne pe Railway ka network choke -> "Request timed out"
+SEM_REUP = asyncio.Semaphore(int(_get("REUP_CONCURRENCY", 2)))
+DL_TIMEOUT = int(_get("DL_TIMEOUT", 900))     # ek file download max
+UP_TIMEOUT = int(_get("UP_TIMEOUT", 900))     # ek file upload max  # bari files 2-at-a-time
 
 
 # ── ADAPTIVE SEND THROTTLE ────────────────────────────────────────────────
@@ -1782,62 +1787,84 @@ async def send_by_file_id(client, dest_chat, msg, st=None):
 
 
 async def _direct_deliver(src, dest_chat, st=None):
-    """User ke apne account se file download -> BOT se seedha user ko bhejo.
+    """File download karke BOT se seedha user ko bhejo.
 
-    Ye path tab chalta hai jab user ne /login kiya ho — us case me owner ka
-    cache channel use nahi ho sakta.
+    Use hota hai jab (a) user ne /login kiya ho, ya (b) custom thumbnail
+    set ho (file_id se bhejne par Telegram thumb ignore kar deta hai).
     """
-    tmp = os.path.join("/tmp", f"dd_{src.id}_{int(time.time()*1000)}")
-    thp, _own_thumb = None, True
-    try:
-        path = await _UB().download_media(src, file_name=tmp)
-        if not path:
-            return False
-        # user ki apni thumbnail > original thumbnail
-        _ct = (st or {}).get("thumb")
-        if _ct and os.path.exists(_ct):
-            thp, _own_thumb = _ct, False        # custom = delete mat karna
-        else:
-            thp, _own_thumb = await _grab_thumb(src), True
-        cap = apply_caption(src.caption or "", st, _fname(src)) if st else (src.caption or None)
-        name = _fname(src) or f"file_{src.id}"
-        if src.video:
-            v = src.video
-            await CLIENT.send_video(dest_chat, path, caption=cap, thumb=thp,
-                                    duration=v.duration or 0, width=v.width or 0,
-                                    height=v.height or 0, supports_streaming=True,
-                                    file_name=name)
-        elif src.photo:
-            await CLIENT.send_photo(dest_chat, path, caption=cap)
-        elif src.audio:
-            a = src.audio
-            await CLIENT.send_audio(dest_chat, path, caption=cap, thumb=thp,
-                                    duration=a.duration or 0,
-                                    performer=a.performer, title=a.title,
-                                    file_name=name)
-        elif src.voice:
-            await CLIENT.send_voice(dest_chat, path, caption=cap)
-        elif src.animation:
-            await CLIENT.send_animation(dest_chat, path, caption=cap, thumb=thp)
-        elif src.video_note:
-            await CLIENT.send_video_note(dest_chat, path)
-        elif src.sticker:
-            await CLIENT.send_sticker(dest_chat, path)
-        else:
-            await CLIENT.send_document(dest_chat, path, caption=cap, thumb=thp,
-                                       file_name=name)
-        return True
-    except Exception as e:
-        log.warning("direct deliver fail msg=%s: %s", src.id, e)
-        return False
-    finally:
-        _rm = [tmp] + ([thp] if (thp and _own_thumb) else [])
-        for f in _rm:
-            if f:
+    async with SEM_REUP:          # ek waqt me sirf 2 bhaari upload
+        tmp = os.path.join("/tmp", f"dd_{src.id}_{int(time.time()*1000)}")
+        thp, own_thumb, path = None, True, None
+        try:
+            path = await asyncio.wait_for(
+                _UB().download_media(src, file_name=tmp), timeout=DL_TIMEOUT)
+            if not path:
+                return False
+            _ct = (st or {}).get("thumb")
+            if _ct and os.path.exists(_ct):
+                thp, own_thumb = _ct, False      # custom thumb delete mat karo
+            else:
+                thp, own_thumb = await _grab_thumb(src), True
+            cap = (apply_caption(src.caption or "", st, _fname(src))
+                   if st else (src.caption or None))
+            name = _fname(src) or f"file_{src.id}"
+
+            async def _up():
+                if src.video:
+                    v = src.video
+                    return await CLIENT.send_video(
+                        dest_chat, path, caption=cap, thumb=thp,
+                        duration=v.duration or 0, width=v.width or 0,
+                        height=v.height or 0, supports_streaming=True,
+                        file_name=name)
+                if src.photo:
+                    return await CLIENT.send_photo(dest_chat, path, caption=cap)
+                if src.audio:
+                    a = src.audio
+                    return await CLIENT.send_audio(
+                        dest_chat, path, caption=cap, thumb=thp,
+                        duration=a.duration or 0, performer=a.performer,
+                        title=a.title, file_name=name)
+                if src.voice:
+                    return await CLIENT.send_voice(dest_chat, path, caption=cap)
+                if src.animation:
+                    return await CLIENT.send_animation(dest_chat, path,
+                                                       caption=cap, thumb=thp)
+                if src.video_note:
+                    return await CLIENT.send_video_note(dest_chat, path)
+                if src.sticker:
+                    return await CLIENT.send_sticker(dest_chat, path)
+                return await CLIENT.send_document(dest_chat, path, caption=cap,
+                                                  thumb=thp, file_name=name)
+
+            # upload flaky ho sakta hai (timeout/broken pipe) -> 3 koshish
+            for att in range(3):
                 try:
-                    os.remove(f)
-                except Exception:
-                    pass
+                    await asyncio.wait_for(_up(), timeout=UP_TIMEOUT)
+                    return True
+                except asyncio.TimeoutError:
+                    log.warning("⏱️ upload timeout msg=%s (try %d/3)", src.id, att + 1)
+                except FloodWait as fe:
+                    w = int(getattr(fe, "value", 10) or 10)
+                    if w > 120:
+                        raise
+                    log.warning("⏳ upload FloodWait %ss msg=%s", w, src.id)
+                    await asyncio.sleep(w + 2)
+                except Exception as ue:
+                    log.warning("upload fail msg=%s (try %d/3): %s",
+                                src.id, att + 1, ue)
+                    await asyncio.sleep(2 * (att + 1))
+            return False
+        except Exception as e:
+            log.warning("direct deliver fail msg=%s: %s", src.id, e)
+            return False
+        finally:
+            for f in ([tmp, path] + ([thp] if (thp and own_thumb) else [])):
+                if f:
+                    try:
+                        os.remove(f)
+                    except Exception:
+                        pass
 
 
 async def fetch_one(chat, msg_id, dest_chat, stats, st=None):
@@ -2473,7 +2500,7 @@ def build_client() -> Client:
         api_id=API_ID,
         api_hash=API_HASH,
         workers=96,
-        max_concurrent_transmissions=32,
+        max_concurrent_transmissions=10,
         sleep_threshold=25,
         in_memory=True,
     )
