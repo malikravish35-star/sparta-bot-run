@@ -1063,6 +1063,9 @@ async def userbot_watchdog():
             alive = False
         if alive:
             continue
+        if SESSION_DEAD:
+            await asyncio.sleep(300)      # /login ka intezaar, spam band
+            continue
         log.info("🔁 watchdog: userbot down hai — reconnect kar raha hoon…")
         try:
             if await start_userbot():
@@ -1091,6 +1094,25 @@ async def warm_peer_cache():
             log.warning("post-warm cache check fail: %s", e)
     except Exception as e:
         log.warning("warm cache fail: %s", e)
+
+
+def _note_auth_fail(e):
+    """Scan ke beech AUTH_KEY error mile to session dead mark karo."""
+    global SESSION_DEAD, USERBOT_OK
+    if "AUTH_KEY" in str(e).upper() and _UB_CTX.get() is None:
+        SESSION_DEAD, USERBOT_OK = True, False
+
+
+def no_file_msg():
+    """Scan khali aaya — asli wajah session hai ya sach me file nahi."""
+    if _UB_CTX.get() is None and (SESSION_DEAD or not USERBOT_OK):
+        return ("🔐 <b>BOT KA SESSION EXPIRE HO GAYA HAI</b>\n"
+                "━━━━━━━━━━━━━━━━━━━\n"
+                "Isliye file nikal nahi paa raha 😕\n\n"
+                "✅ <b>Turant hal:</b> apne account se <b>/login</b> karo — "
+                "phir aapke saare groups se files milengi ⚡\n\n"
+                "❓ Ya admin @THE_SPARTAN_300 ko batao")
+    return "⚠️ Is link ke neeche <b>koi file nahi mili</b>."
 
 
 async def ub_ready():
@@ -1232,6 +1254,7 @@ async def scan_topic(chat, topic_id, start_id, need, on_progress=None):
         return None
     except Exception as e:
         log.warning("topic scan fail (topic=%s): %s", topic_id, e)
+        _note_auth_fail(e)
         return None
 
     got = sorted(set(got))
@@ -2060,7 +2083,7 @@ async def handle_links(m: Message, pairs, _from_ask=False, _user=None, _total=No
                     "⚠️ Scan me <b>temporary dikkat</b> aayi (server session conflict).\n\n"
                     "📌 Link ko <b>ek baar dobara</b> bhejo — chal jayega.")
             return await scan.edit_text(
-                "⚠️ Is link me <b>koi file nahi mili</b> — sirf text messages hain.\n\n"
+                no_file_msg() + "\n\n"
                 "📌 File wale post ka link bhejo (ya range do).")
         if len(media) > 1:
             mx = min(len(media), limit)
@@ -2557,7 +2580,7 @@ CMD_BLOCK = ["start", "help", "id", "search", "plans", "buy", "myplan", "stats",
              "setcache", "link", "status",
              "forward", "cancel", "index", "reindex", "approve", "reject", "setplan",
              "removeplan", "user", "find", "reqs", "usage", "broadcast", "del", "ping",
-             "settings", "setting", "custom", "raw", "vj",
+             "settings", "setting", "custom", "raw", "vj", "logoutall",
              "login", "logout", "myaccount", "account"]
 
 # ─────────────────────────────── USER: start / help / id ────────────────────
@@ -2856,7 +2879,7 @@ async def on_plain_text(c, m: Message):
                             pass
                         if not sel:
                             return await m.reply_text(
-                                "⚠️ Is link ke neeche <b>koi file nahi mili</b>.")
+                                no_file_msg())
                     return await handle_links(m, sel, _from_ask=True, _total=n)
                 sel = st["pairs"][:n]
                 return await handle_links(m, sel, _from_ask=True)
@@ -3174,6 +3197,15 @@ async def cmd_logout(c, m: Message):
     uid = m.from_user.id
     LOGIN_WAIT.pop(uid, None)
     cl = USER_CLIENTS.pop(uid, None)
+    # ★ agar yahi account GLOBAL userbot hai to isse band MAT karo, warna
+    #   poora bot (aur sab buyers) band ho jata hai
+    if cl is not None and cl is USERBOT:
+        return await m.reply_text(
+            "⚠️ <b>Ye account bot ka MAIN userbot hai</b>\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "Isse logout karne se <b>saare buyers</b> ka bot band ho jayega 😬\n\n"
+            "✅ Aapka personal use band kar diya hai, par main session chalu hai.\n"
+            "❌ Sach me hatana hai to: <code>/logoutall</code>")
     if cl:
         try:
             await cl.stop()
@@ -3185,6 +3217,29 @@ async def cmd_logout(c, m: Message):
     except Exception:
         pass
     await m.reply_text("🔓 <b>Logout ho gaya.</b>\nDobara: /login")
+
+
+@handler(filters.command("logoutall") & is_admin)
+async def cmd_logoutall(c, m: Message):
+    """Main userbot ko bhi hata do (sirf admin)."""
+    global USERBOT, USERBOT_OK, SESSION_DEAD
+    uid = m.from_user.id
+    USER_CLIENTS.pop(uid, None)
+    try:
+        if USERBOT:
+            await USERBOT.stop()
+    except Exception:
+        pass
+    USERBOT, USERBOT_OK, SESSION_DEAD = None, False, True
+    for k in (uid, 0):
+        try:
+            await STORE.upsert("sessions", "user_id", k,
+                               {"user_id": k, "session": None})
+        except Exception:
+            pass
+    await m.reply_text("🔓 <b>Main userbot bhi hata diya.</b>\n"
+                       "⚠️ Ab koi bhi link tab tak kaam nahi karega jab tak "
+                       "aap /login nahi karte.")
 
 
 @handler(filters.command(["myaccount", "account"]) & filters.private)
@@ -4029,7 +4084,7 @@ async def cb_ask(c, q: CallbackQuery):
                                                  topic=st.get("topic"), on_progress=_pf2)
             if not sel:
                 return await q.message.reply_text(
-                    "⚠️ Is link ke neeche <b>koi file nahi mili</b>.")
+                    no_file_msg())
         await handle_links(q.message, sel, _from_ask=True, _user=q.from_user, _total=n)
         return
     pairs = st["pairs"][:n]
