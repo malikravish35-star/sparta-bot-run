@@ -1684,6 +1684,17 @@ async def get_set(uid):
     for k in DEFAULT_SET:
         if k in doc and doc[k] is not None:
             st[k] = doc[k]
+    # ── ek baar ka migration: pehle sequence galti se OFF save ho gaya tha
+    #    (purana default). Ise ON karo; user chahe to toggle se OFF kar sakta hai.
+    if not doc.get("seq_fix"):
+        st["sequence"] = True
+        USER_SET[uid] = st
+        try:
+            await STORE.upsert("settings", "user_id", uid,
+                               dict(st, user_id=uid, seq_fix=1))
+        except Exception:
+            pass
+        return st
     USER_SET[uid] = st
     return st
 
@@ -1693,7 +1704,8 @@ async def save_set(uid, **kw):
     st.update(kw)
     USER_SET[uid] = st
     try:
-        await STORE.upsert("settings", "user_id", uid, dict(st, user_id=uid))
+        await STORE.upsert("settings", "user_id", uid,
+                           dict(st, user_id=uid, seq_fix=1))
     except Exception:
         log.exception("save_set fail uid=%s", uid)
     return st
@@ -2642,7 +2654,7 @@ CMD_BLOCK = ["start", "help", "id", "search", "plans", "buy", "myplan", "stats",
              "setcache", "link", "status",
              "forward", "cancel", "index", "reindex", "approve", "reject", "setplan",
              "removeplan", "user", "find", "reqs", "usage", "broadcast", "del", "ping",
-             "settings", "setting", "custom", "raw", "vj", "logoutall", "setmain",
+             "settings", "setting", "custom", "raw", "vj", "logoutall", "setmain", "seq",
              "login", "logout", "myaccount", "account"]
 
 # ─────────────────────────────── USER: start / help / id ────────────────────
@@ -3299,6 +3311,25 @@ async def cmd_setmain(c, m: Message):
         "👑 <b>Ab ye account GLOBAL fallback hai.</b>\n"
         "Jin users ne /login nahi kiya, wo iske through kaam karenge.\n"
         "❌ Hatane ke liye: /logoutall")
+
+
+@handler(filters.command("seq") & filters.private)
+async def cmd_seq(c, m: Message):
+    """/seq on  ya  /seq off — files order me chahiye ya max speed."""
+    parts = (m.text or "").split()
+    uid = m.from_user.id
+    if len(parts) > 1 and parts[1].lower() in ("on", "off"):
+        val = parts[1].lower() == "on"
+        await save_set(uid, sequence=val)
+        return await m.reply_text(
+            "🔢 <b>Sequence ON</b> — files bilkul order me aayengi ✅"
+            if val else
+            "⚡ <b>Sequence OFF</b> — max speed, order mix ho sakta hai")
+    st = await get_set(uid)
+    cur = st.get("sequence", True)
+    await m.reply_text(
+        f"🔢 <b>Sequence</b> abhi : <b>{'ON ✅' if cur else 'OFF ⚡'}</b>\n\n"
+        f"Badalne ke liye: <code>/seq on</code> ya <code>/seq off</code>")
 
 
 @handler(filters.command("logoutall") & is_admin)
