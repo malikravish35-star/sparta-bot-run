@@ -2297,7 +2297,15 @@ async def handle_links(m: Message, pairs, _from_ask=False, _user=None, _total=No
 
     tick = asyncio.create_task(_ticker())
     try:
-        await asyncio.gather(*[one(c, i, n) for n, (c, i) in enumerate(allowed)])
+        if _gates:
+            # SEQUENCE ON -> bilkul serial. gather+gates me do padosi slot
+            # kabhi-kabhi overlap ho jaate the (log: slot=10 se pehle slot=9
+            # nahi aaya). Simple loop me ye race possible hi nahi: agli file
+            # tabhi shuru hoti hai jab pichhli poori tarah deliver ho chuki ho.
+            for _n, (_c, _i) in enumerate(allowed):
+                await one(_c, _i, _n)
+        else:
+            await asyncio.gather(*[one(c, i, n) for n, (c, i) in enumerate(allowed)])
     except asyncio.CancelledError:
         try:
             await status.edit_text(
