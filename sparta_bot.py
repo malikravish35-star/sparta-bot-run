@@ -1328,7 +1328,25 @@ async def scan_forward(chat, start_id, need, cap=5000, on_progress=None,
         log.info("topic scan se kuch nahi — id-range scan pe fallback")
 
     out = []
-    cid = start_id
+    # ★ SABSE PEHLE: jis message ka link diya hai, WAHI file.
+    # get_chat_history() batch-scan kabhi-kabhi is exact message ko chhod
+    # deta tha (gaps/limit ki wajah se), isliye user ko uski maangi hui file
+    # milti hi nahi thi aur do alag link ek hi file de dete the.
+    try:
+        _first = await _UB().get_messages(chat, start_id)
+        if isinstance(_first, (list, tuple)):
+            _first = _first[0] if _first else None
+        if _first and not getattr(_first, "empty", False):
+            _k = _media_kind(_first)
+            log.info("🎯 link wala message %s -> media=%s", start_id, _k or "NAHI")
+            if _k:
+                out.append((chat, start_id))
+        else:
+            log.info("🎯 link wala message %s khali/nahi mila", start_id)
+    except Exception as _e:
+        log.warning("🎯 link wala message %s check fail: %s", start_id, _e)
+
+    cid = start_id + 1 if out else start_id
     end = start_id + cap
     empty_rounds = 0
     while len(out) < need and cid <= end:
@@ -1400,7 +1418,16 @@ async def scan_forward(chat, start_id, need, cap=5000, on_progress=None,
                 await on_progress(len(out), cid)
             except Exception:
                 pass
-    return out[:need]
+    # id ke hisaab se ascending + duplicate hata do (link wala message dobara
+    # batch me aa sakta hai)
+    _seen, _uniq = set(), []
+    for _pair in sorted(out, key=lambda _p: _p[1]):
+        if _pair[1] not in _seen:
+            _seen.add(_pair[1])
+            _uniq.append(_pair)
+    log.info("🔎 scan_forward start=%s need=%s -> mila=%s first=%s",
+             start_id, need, len(_uniq), _uniq[0][1] if _uniq else None)
+    return _uniq[:need]
 
 
 # ye "media" nahi hain — inhe file nahi maana jayega
