@@ -1377,8 +1377,13 @@ async def scan_forward(chat, start_id, need, cap=5000, on_progress=None,
         if not isinstance(msgs, (list, tuple)):
             msgs = [msgs]
         alive = 0
-        for mm in msgs:
-            if mm and not getattr(mm, "empty", False):
+        # ⚠️ get_chat_history() NEWEST-FIRST deta hai, isliye batch ko pehle
+        # id se ascending karo. Warna `out` ulta banta tha aur `out[:need]`
+        # link ke neeche wali files ke bajaye channel ki SABSE NAYI files
+        # utha leta tha -> user ko lectures "random" lagte the.
+        for mm in sorted([x for x in msgs if x],
+                         key=lambda _x: getattr(_x, "id", 0)):
+            if not getattr(mm, "empty", False):
                 alive += 1
                 if _has_media(mm):
                     out.append((chat, mm.id))
