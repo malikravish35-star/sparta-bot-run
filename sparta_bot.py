@@ -202,7 +202,8 @@ UB_CONCURRENCY = int(_get("USERBOT_CONCURRENCY", 14))   # speed: 4 -> 8 parallel
 UB_DELAY       = float(_get("USERBOT_DELAY", 0.0))     # per-file extra sleep hataya
 BOT_SEND_GAP   = float(_get("BOT_SEND_GAP", 0.04))     # global throttle (adaptive, flood-safe)
 UB_TRANSMISSIONS = int(_get("UB_TRANSMISSIONS", 14))   # userbot ke parallel DC streams
-SEQ_TIMEOUT    = int(_get("SEQ_TIMEOUT", 1800))        # sequence gate max wait (stuck-proof)
+SEQ_TIMEOUT    = int(_get("SEQ_TIMEOUT", 1800))        # (legacy) sequence gate max wait
+SEQ_STALL      = int(_get("SEQ_STALL", 1200))          # sequence: itni der KOI progress na ho tabhi skip
 PEER_SCAN_MAX  = int(_get("PEER_SCAN_MAX", 90))        # dialogs scan max seconds (hang-proof)
 SCAN_NO_HIST   = _get("SCAN_NO_HIST", "0") == "1"      # 1 = history method off
 TOPIC_SCAN_MAX = int(os.getenv("TOPIC_SCAN_MAX", "4000"))
@@ -2218,17 +2219,32 @@ async def handle_links(m: Message, pairs, _from_ask=False, _user=None, _total=No
             except Exception:
                 pass
 
+    _seq_last = [time.time()]      # kisi bhi slot ki aakhri delivery ka waqt
+
     async def _seq_fetch(chat, mid, idx):
-        """Apni baari aane par hi deliver karo (order guarantee)."""
-        try:
-            await asyncio.wait_for(_gates[idx].wait(), timeout=SEQ_TIMEOUT)
-        except asyncio.TimeoutError:
-            log.warning("⏭️ sequence gate timeout idx=%s — aage badha", idx)
+        """Apni baari aane par hi deliver karo (order guarantee).
+
+        Pehle har slot batch-start se SEQ_TIMEOUT tak hi rukta tha, isliye
+        lambe batch (badi files + flood wait) me baad wale saare slot ek saath
+        timeout ho kar bekaar order me nikal jaate the. Ab wait *stall-based*
+        hai: jab tak koi bhi file deliver ho rahi hai, baari ka intezaar
+        chalta rahega. Sirf tab skip hota hai jab poora batch sach me atak jaye.
+        """
+        while True:
+            try:
+                await asyncio.wait_for(_gates[idx].wait(), timeout=15)
+                break
+            except asyncio.TimeoutError:
+                if time.time() - _seq_last[0] > SEQ_STALL:
+                    log.warning("⏭️ sequence stall %ss — slot=%s aage badha",
+                                SEQ_STALL, idx)
+                    break
         try:
             _r = await fetch_one(chat, mid, chat_id, stats, st)
             log.info("📤 SENT slot=%s mid=%s ok=%s", idx, mid, _r[0])
             return _r
         finally:
+            _seq_last[0] = time.time()
             if idx + 1 < len(_gates):
                 _gates[idx + 1].set()
 
@@ -2239,6 +2255,11 @@ async def handle_links(m: Message, pairs, _from_ask=False, _user=None, _total=No
     _seq_on = st.get("sequence", True)
     if _seq_on is None:
         _seq_on = True
+    if _seq_on:
+        # Telegram history NEWEST-FIRST deti hai -> lectures ulte (50,49,48…)
+        # ja rahe the. Kaunsi files chuni gayi wo waise ka waisa hai; sirf
+        # DELIVERY ORDER ko message-id se ascending kar rahe hain.
+        allowed = sorted(allowed, key=lambda _p: _p[1])
     _gates = [asyncio.Event() for _ in allowed] if _seq_on else None
     log.info("📑 SEQUENCE %s | files=%d | order=%s",
              "ON" if _seq_on else "OFF", len(allowed),
