@@ -1312,6 +1312,20 @@ async def scan_topic(chat, topic_id, start_id, need, on_progress=None):
     return [(chat, i) for i in fwd[:need]]
 
 
+def _hist_supports_minmax():
+    """kurigram/pyrogram me get_chat_history min_id/max_id leta hai ya nahi."""
+    try:
+        import inspect as _i
+        from pyrogram import Client as _C
+        _pp = _i.signature(_C.get_chat_history).parameters
+        return "min_id" in _pp and "max_id" in _pp
+    except Exception:
+        return False
+
+
+_HIST_MINMAX = _hist_supports_minmax()
+
+
 async def scan_forward(chat, start_id, need, cap=5000, on_progress=None,
                        topic=None):
     """Ek message id se SHURU karke neeche ki files collect karo.
@@ -1358,10 +1372,17 @@ async def scan_forward(chat, start_id, need, cap=5000, on_progress=None,
         if not SCAN_NO_HIST:
             try:
                 hist = []
+                # ⚠️ `offset_id` ab deprecated hai aur is build me theek se
+                # filter NAHI karta — scan hamesha channel ke sabse naye
+                # messages laa raha tha (isliye har link 688 pe ja girta tha
+                # aur beech ki files gayab ho jaati thi).
+                # `min_id`/`max_id` asli boundary filter hai — wahi use karo.
+                _kw = ({"min_id": batch[0], "max_id": batch[-1]}
+                       if _HIST_MINMAX else {"offset_id": batch[-1] + 1})
                 async for _mm in _UB().get_chat_history(
-                        chat, limit=len(batch), offset_id=batch[-1] + 1):
-                    if _mm and _mm.id < batch[0]:
-                        break
+                        chat, limit=len(batch), **_kw):
+                    if _mm and (_mm.id < batch[0] or _mm.id > batch[-1]):
+                        continue
                     hist.append(_mm)
                 if hist:
                     msgs = hist
