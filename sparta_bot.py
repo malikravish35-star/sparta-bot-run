@@ -2703,11 +2703,13 @@ def handler(flt, kind="message", group=0):
                     if _slow:
                         _slow.cancel()
             except FloodWait as e:
+                class _SkipBig(Exception):
+                    pass
                 _w = int(getattr(e, "value", 5) or 5)
                 log.warning("FloodWait %ss in %s", _w, fn.__name__)
                 # Pehle ye chup-chaap so jaata tha -> user ko lagta tha bot
                 # kharab hai. Ab saaf bata do ki Telegram ne rok lagayi hai.
-                if _w > 60:
+                if _w > 15:
                     try:
                         _ch = getattr(update, "chat", None) or getattr(
                             getattr(update, "message", None), "chat", None)
@@ -2717,6 +2719,14 @@ def handler(flt, kind="message", group=0):
                             _left = (f"{_hh} ghante {_mm} minute" if _hh
                                      else (f"{_mm} minute {_s} second" if _mm
                                            else f"{_s} second"))
+                            if _w <= 120:
+                                await client.send_message(
+                                    _ch.id,
+                                    "⏳ <b>Telegram ne "
+                                    f"<u>{_left}</u> ka wait diya hai</b>\n"
+                                    "🫧 Ruko — bot apne aap resume kar lega, "
+                                    "dobara bhejne ki zaroorat nahi ⚔️")
+                                raise _SkipBig
                             await client.send_message(
                                 _ch.id,
                                 "⏳ <b>TELEGRAM NE THODI DER ROK LAGAYI HAI</b>\n"
@@ -2730,6 +2740,8 @@ def handler(flt, kind="message", group=0):
                                 "• Baar-baar link mat bhejo, limit <b>aur badh</b> jaati hai\n"
                                 "• Cancel/retry se bhi limit badhti hai\n\n"
                                 "🫧 Samay poora hote hi sab normal ⚔️")
+                    except _SkipBig:
+                        pass
                     except Exception:
                         pass
                 await asyncio.sleep(min(_w, 60))
