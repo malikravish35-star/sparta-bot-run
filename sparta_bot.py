@@ -2703,8 +2703,36 @@ def handler(flt, kind="message", group=0):
                     if _slow:
                         _slow.cancel()
             except FloodWait as e:
-                log.warning("FloodWait %ss in %s", getattr(e, "value", "?"), fn.__name__)
-                await asyncio.sleep(min(int(getattr(e, "value", 5)), 60))
+                _w = int(getattr(e, "value", 5) or 5)
+                log.warning("FloodWait %ss in %s", _w, fn.__name__)
+                # Pehle ye chup-chaap so jaata tha -> user ko lagta tha bot
+                # kharab hai. Ab saaf bata do ki Telegram ne rok lagayi hai.
+                if _w > 60:
+                    try:
+                        _ch = getattr(update, "chat", None) or getattr(
+                            getattr(update, "message", None), "chat", None)
+                        if _ch:
+                            _m, _s = divmod(_w, 60)
+                            _hh, _mm = divmod(_m, 60)
+                            _left = (f"{_hh} ghante {_mm} minute" if _hh
+                                     else (f"{_mm} minute {_s} second" if _mm
+                                           else f"{_s} second"))
+                            await client.send_message(
+                                _ch.id,
+                                "⏳ <b>TELEGRAM NE THODI DER ROK LAGAYI HAI</b>\n"
+                                "━━━━━━━━━━━━━━━━━━━\n"
+                                f"🕒 Baaki samay: <b>{_left}</b>\n\n"
+                                "😌 Ye <b>bot ki kharabi nahi</b> hai — Telegram ne "
+                                "tumhare account pe temporary limit lagayi hai "
+                                "(bahut saari request ek saath jaane se).\n\n"
+                                "📌 <b>Kya karo:</b>\n"
+                                "• Bas <b>intezaar karo</b> — apne aap khul jayega\n"
+                                "• Baar-baar link mat bhejo, limit <b>aur badh</b> jaati hai\n"
+                                "• Cancel/retry se bhi limit badhti hai\n\n"
+                                "🫧 Samay poora hote hi sab normal ⚔️")
+                    except Exception:
+                        pass
+                await asyncio.sleep(min(_w, 60))
             except MessageNotModified:
                 pass
             except Exception as e:
